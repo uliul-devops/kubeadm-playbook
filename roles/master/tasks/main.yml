@@ -4,6 +4,11 @@
   tags:
   - always
 
+- name: decide_master_name
+  include_role:
+    name: common
+    tasks_from: decide_master_name
+
 #- name: Install packages required by rook (ceph) storage setup
 #  package: name={{ item }} state={{ package_state | default ('latest') }}
 #  when: rook is defined and rook.enabled
@@ -11,42 +16,189 @@
 #  - jq
 #  - ceph-common
 
-- name: Pull images on master
-  command: /usr/bin/docker pull "{{ item }}:{{ kubeadm_master_config.kubernetesVersion | default ('latest') }}"
-  with_items:
-  - "gcr.io/google_containers/kube-proxy-amd64"
-  - "gcr.io/google_containers/kube-controller-manager-amd64"
-  - "gcr.io/google_containers/kube-apiserver-amd64"
-  - "gcr.io/google_containers/kube-scheduler-amd64"
+## PULL IMAGES
+- name: Pull master images on master
+  #TODO: to be removed/replaced in 1.11 with the kubeadm pull command (kubeadm config images pull --kubernetes-version v11.0.3 ), but better remove, as kubeadm pre-flight does the pull now anyway...
+  #command: /usr/bin/docker pull "{{ item }}:{{ ClusterConfiguration.kubernetesVersion | default ('latest') }}"
+  #command: /usr/bin/docker pull "{{ images_repo |default ('k8s.gcr.io') }}/{{ item }}:{{ ClusterConfiguration.kubernetesVersion | default ('latest') }}"
+  command: /usr/bin/docker pull "{{ item.name }}:{{ item.tag }}"
+  with_items: "{{ DOCKER_IMAGES }}"
   tags:
   - prepull_images
   register: command_result
   changed_when: '"Image is up to date" not in command_result.stdout or "Already exists" not in command_result.stdout'
-  when: pre_pull_k8s_images is defined and pre_pull_k8s_images and kubeadm_master_config.kubernetesVersion is defined
-  #when: full_kube_reinstall is defined and full_kube_reinstall and kubeadm_master_config.kubernetesVersion is defined
+  #when: pre_pull_k8s_images is defined and pre_pull_k8s_images
+  #when: pre_pull_k8s_images is defined and pre_pull_k8s_images and ClusterConfiguration.kubernetesVersion is defined
+  #when: full_kube_reinstall is defined and full_kube_reinstall and ClusterConfiguration.kubernetesVersion is defined
+  when: 
+  - DOCKER_IMAGES is defined
+  - pre_pull_k8s_images is defined 
+  - pre_pull_k8s_images 
+  - images_repo is defined
+  #- ClusterConfiguration.kubernetesVersion is defined
+  #- ClusterConfiguration.apiVersion == "kubeadm.k8s.io/v1alpha1"
+  #when: full_kube_reinstall is defined and full_kube_reinstall and ClusterConfiguration.kubernetesVersion is defined
 
-- name: adding {{ inventory_hostname,inventory_hostname_short }} to the kubeadm_master_config.apiServerCertSANs
+- name: Pull images on master (from internet when images_repo is not defined)
+  command: "kubeadm config images pull --kubernetes-version {{ ClusterConfiguration.kubernetesVersion }}"
+  tags:
+  - prepull_images
+  register: command_result
+  changed_when: '"Image is up to date" not in command_result.stdout or "Already exists" not in command_result.stdout'
+  when: 
+  - pre_pull_k8s_images is defined 
+  - pre_pull_k8s_images 
+  - DOCKER_IMAGES is not defined or images_repo is not defined
+  - ClusterConfiguration.kubernetesVersion is version_compare ( 'v1.11', '>=' )
+
+## 
+- name: Remove /etc/systemd/system/kubelet.service.d/20-etcd-service-manager.conf if present from HA etcd setup time (in MasterHA)
+  file: "path=/etc/systemd/system/kubelet.service.d/20-etcd-service-manager.conf state=absent"
+
+- name: making sure there is an apiServer section under ClusterConfiguration
   set_fact:
-    extended_cert_list: "{{ [inventory_hostname,inventory_hostname_short] | union (kubeadm_master_config.apiServerCertSANs | default([]) ) }}"
-    #extended_cert_list: "{{ [inventory_hostname,inventory_hostname_short] | union (kubeadm_master_config.apiServerCertSANs | default([kubernetes]) ) }}"
-  when: kubeadm_master_config is defined 
+    ClusterConfiguration: "{{ ClusterConfiguration | combine ({ 'apiServer' : {} }, recursive=True) }}"
+  when: ClusterConfiguration is defined
 
-- name: merging {{ inventory_hostname,inventory_hostname_short }} to the kubeadm_master_config.apiServerCertSANs
+- name: making sure there is a controllerManager section under ClusterConfiguration
   set_fact:
-    kubeadm_master_config: "{{ kubeadm_master_config | combine ({ 'apiServerCertSANs' : extended_cert_list }, recursive=True) }}"
-  when: extended_cert_list is defined and kubeadm_master_config is defined
+    ClusterConfiguration: "{{ ClusterConfiguration | combine ({ 'controllerManager' : {} }, recursive=True) }}"
+  when: ClusterConfiguration is defined
 
-- name: "This is the kubeadm_master_config to be used"
-  debug: var=kubeadm_master_config #|to_nice_yaml
+## SANs
+- name: adding {{ inventory_hostname,inventory_hostname_short }} to the ClusterConfiguration.apiServer.certSANs
+  set_fact:
+    extended_cert_list: "{{ [ansible_default_ipv4.address,inventory_hostname,inventory_hostname_short,custom.networking.masterha_fqdn,'127.0.0.1',custom.networking.masterha_vip | default(ansible_fqdn)] | union (ClusterConfiguration.apiServer.certSANs | default([]) ) }}"
+    #extended_cert_list: "{{ [inventory_hostname,inventory_hostname_short] | union (ClusterConfiguration.apiServer.certSANs | default([kubernetes]) ) }}"
+  when: ClusterConfiguration is defined 
+
+- name: merging {{ inventory_hostname,inventory_hostname_short }} to the ClusterConfiguration.apiServer.certSANs
+  set_fact:
+    ClusterConfiguration: "{{ ClusterConfiguration | combine ({ 'apiServer' : {'certSANs' : extended_cert_list } }, recursive=True) }}"
+  when: extended_cert_list is defined and ClusterConfiguration is defined
+
+## Cloud-Config - pre cluster init steps
+  ## Add the cloud-config to the ClusterConfiguration for kubeadm.k8s.io/v1alpha2 and above
+  ## as the ClusterConfiguration.cloudProvider has been deprecated. We use ClusterConfiguration.cloudProvider as conditional for triggering below
+  ## as well as triggering updates to the /etc/systemd/system/kubelet.service.d/10-kubeadm.conf (in some other step)
+- block:
+  - name: add cloud-config to apiServer.extraVolumes
+    set_fact:
+      ClusterConfiguration: "{{  ClusterConfiguration | combine ( { 'apiServer' : {'extraVolumes': ClusterConfiguration.apiServer.extraVolumes | default ([]) | union ([{'name': 'cloud', 'hostPath': '/etc/kubernetes/cloud-config',  'mountPath': '/etc/kubernetes/cloud-config' }] ) } } ) }}"
+
+  - name: add cloud-config to apiServer.extraArgs
+    set_fact:
+      ClusterConfiguration: "{{  ClusterConfiguration | combine ( { 'apiServer' : {'extraArgs': ClusterConfiguration.apiServerExtraArgs | default ({}) | combine ( {'cloud-provider': ClusterConfiguration.cloudProvider, 'cloud-config': '/etc/kubernetes/cloud-config' } ) } } ) }}"
+
+  - name: add cloud-config to controllerManager.extraVolumes
+    set_fact:
+      ClusterConfiguration: "{{  ClusterConfiguration | combine ( { 'controllerManager' : {'extraVolumes': ClusterConfiguration.controllerManager.extraVolumes | default ([]) | union ([{'name': 'cloud', 'hostPath': '/etc/kubernetes/cloud-config',  'mountPath': '/etc/kubernetes/cloud-config' }] ) } } ) }}"
+
+  - name: add cloud-config to controllerManager.extraArgs
+    set_fact:
+      ClusterConfiguration: "{{  ClusterConfiguration | combine ( { 'controllerManager' : {'extraArgs': ClusterConfiguration.controllerManager.extraArgs | default ({}) | combine ( {'cloud-provider': ClusterConfiguration.cloudProvider, 'cloud-config': '/etc/kubernetes/cloud-config' } ) } ) }}"
+
+  - name: InitConfiguration - cloudProvider merging {{ ClusterConfiguration.cloudProvider }} to the InitConfiguration.nodeRegistration.kubeletExtraArgs
+    set_fact:
+      InitConfiguration: "{{  InitConfiguration | combine ( { 'nodeRegistration': {'kubeletExtraArgs': {'cloud-provider': ClusterConfiguration.cloudProvider, 'cloud-config': '/etc/kubernetes/cloud-config' }  } }, recursive=True) }}"
+  when:
+  - ClusterConfiguration is defined
+  - ClusterConfiguration.cloudProvider is defined
+  - ( ClusterConfiguration.apiVersion >= "kubeadm.k8s.io/v1alpha3" ) or (ClusterConfiguration.apiVersion == "kubeadm.k8s.io/v1")
+
+### MasterHA: ETCD Setup on master
+- name: MasterHA - build etcd endpoints list using fqdn
+  set_fact:
+    extended_etcd_endpoints_list: "{{ groups['etcd'] | map('extract', hostvars, ['ansible_fqdn']) | map('regex_replace', '^(.*)$','https://\\1:2379') | list  }}"
+  when: 
+  - groups['masters'] | length > 1
+  - custom.networking.fqdn.always or custom.networking.fqdn.etcd
+
+- name: MasterHA - build etcd endpoints list using ipv4
+  set_fact:
+    extended_etcd_endpoints_list: "{{ groups['etcd'] | map('extract', hostvars, ['ansible_default_ipv4','address']) | map('regex_replace', '^(.*)$','https://\\1:2379') | list  }}"
+  when: 
+  - groups['masters'] | length > 1
+  - custom.networking.fqdn.always == false 
+  - custom.networking.fqdn.etcd == false
+
+- name: MasterHA - set etcd endpoints
+  set_fact:
+    ClusterConfiguration: "{{ ClusterConfiguration | combine ({ 'etcd' : { 'external': { 'endpoints': extended_etcd_endpoints_list} } }, recursive=True) }}"
+      #union (ClusterConfiguration.etcd.endpoints | default([]) ) }}"
+  when: groups['masters'] | length > 1
+
+### MasterHA: point master to the ETCD certs 
+- name: MasterHA - set etcd cert file paths
+  set_fact:
+    ClusterConfiguration: "{{ ClusterConfiguration | combine ({ 'etcd' : { 'external':  item } }, recursive=True) }}"
+  when: groups['masters'] | length > 1
+  with_items:
+  - { 'caFile': '/etc/kubernetes/pki/etcd/ca.crt' }
+  - { 'certFile': '/etc/kubernetes/pki/apiserver-etcd-client.crt' }
+  - { 'keyFile': '/etc/kubernetes/pki/apiserver-etcd-client.key' }
+
+### MasterHA : point api.controlPlaneEndpoint and api.advertiseAddress to {{ custom.networking.masterha_vip }}
+- name: MasterHA merging {{ custom.networking.masterha_vip }} to the ClusterConfiguration.controlPlaneEndpoint
+  set_fact:
+    ClusterConfiguration: "{{  ClusterConfiguration | combine ( {'controlPlaneEndpoint': custom.networking.masterha_vip }, recursive=True) }}"
+  when: groups['masters'] | length > 1
+
+- name: MasterHA merging {{ custom.networking.masterha_vip }} to the InitConfiguration.advertiseAddress
+  set_fact:
+    InitConfiguration: "{{  InitConfiguration | combine ( { 'localAPIEndpoint': {'advertiseAddress': custom.networking.masterha_vip  } }, recursive=True) }}"
+  when: groups['masters'] | length > 1
+  # tags:
+  # - always
+  #- helm
+
+### Configuration is prepared, show it, write it, use it
+- name: "debug: This is the master init configuration to be used:"
+  debug: var={{item}}
   changed_when: false
+  with_items:
+  - ClusterConfiguration
+  - InitConfiguration
+  - KubeProxyConfiguration
+  - KubeletConfiguration
 
 - name: Make sure /etc/kubernetes folder exists
   file: path=/etc/kubernetes/ state=directory mode=0755
 
-- name: Writing kubeadm_master_config to /etc/kubernetes/kubeadm-master.conf
-  copy: content="{{ kubeadm_master_config | to_nice_yaml }}" dest="/etc/kubernetes/kubeadm-master.conf" force=yes
+- name: Writing ClusterConfiguration and InitConfiguration to /etc/kubernetes/kubeadm-master.conf
+  copy:
+    dest: /etc/kubernetes/kubeadm-master.conf
+    force: yes
+    content: |
+      {{ ClusterConfiguration | to_nice_yaml }}
+      ---
+      {{ InitConfiguration | to_nice_yaml }}
+      ---
+      {{ KubeProxyConfiguration | to_nice_yaml }}
+      ---
+      {{ KubeletConfiguration | to_nice_yaml }}
+      
+- name: Make sure that kubelet is not up (when on secondary-masters)
+  service: name=kubelet state=stopped
+  when:
+  - groups['masters'] | length > 1
+  - inventory_hostname not in groups['primary-master']
 
-- name: "Initialize cluster with --config /etc/kubernetes/kubeadm-master.conf"
+- name: Unarchive master-certs.tar.gz to /etc/kubernetes/pki/ (when on secondary-masters)
+  unarchive: copy=yes src=/tmp/master-certs.tar.gz dest=/etc/kubernetes/pki/
+  when:
+  - groups['masters'] | length > 1
+  - inventory_hostname not in groups['primary-master']
+
+- name: kubeadm_init_args when MasterHA and this master node is also an etcd node (need to ignore two preflight errors here)
+  set_fact:
+    kubeadm_init_args: "{{ ' '.join((kubeadm_init_args | default(' '), '--ignore-preflight-errors=FileAvailable--etc-kubernetes-manifests-etcd.yaml', '--ignore-preflight-errors=Port-10250' )) }}"
+    #, '--ignore-preflight-errors=DirAvailable--var-lib-etcd', '--ignore-preflight-errors=Port-2379'
+  when: 
+  - "'etcd' in group_names"
+  - groups['etcd'] | length > 1
+
+- name: "Initialize cluster with {{kubeadm_init_args}} --config /etc/kubernetes/kubeadm-master.conf"
   # Note: one cannot merge config from both config file anc cli. Only the config file will be used (when present)
 #  environment: '{{env_kc}}'
   command: /usr/bin/kubeadm init {{ kubeadm_init_args | default(" ") }} --config /etc/kubernetes/kubeadm-master.conf
@@ -60,26 +212,44 @@
 - name: kubeadm_init output var
   debug: var=kubeadm_init verbosity=4
 
-- name: find the token of the newly created cluster
-  command: bash -c '/usr/bin/kubeadm token list | tail -n 1| cut -f 1 -d" "'
-  register: kubeadm_token
-  when: kubeadm_master_config is not defined or kubeadm_master_config.token is not defined
-  changed_when: false
-  tags:
-  - node  # it is required for the node to register
+- name: Archive /etc/kubernetes/pki/[cs]a.* (when on primary-master)
+  archive: path=/etc/kubernetes/pki/[cs]a.*,/etc/kubernetes/pki/front-proxy-ca.crt,/etc/kubernetes/pki/front-proxy-ca.key dest=/tmp/master-certs.tar.gz
+  when:
+  - groups['masters'] | length > 1
+  - inventory_hostname in groups['primary-master']
 
-#- name: populate the token in the kubeadm_master_config
+- name: Fetch /tmp/master-certs.tar.gz from primary-master to control machine (when on primary-master)
+  fetch: src=/tmp/master-certs.tar.gz dest=/tmp/ flat=yes
+  when:
+  - groups['masters'] | length > 1
+  - inventory_hostname in groups['primary-master']
+
+# - name: find the token of the newly created cluster
+#   command: bash -c '/usr/bin/kubeadm token list | grep -v "<invalid>" | grep "system:bootstrappers" | grep "authentication" | tail -n 1 | cut -f 1 -d" "'
+#   register: kubeadm_token
+#   when: 
+#   - InitConfiguration is not defined or InitConfiguration.bootstrapTokens[0].token is not defined
+#     InitConfiguration.token is not defined
+#   - inventory_hostname in groups['primary-master'] or inventory_hostname == groups["master"][0]
+#   changed_when: false
+#   tags:
+#   - node  # it is required for the node to register
+
+
+#- name: populate the token in the ClusterConfiguration
 #  set_fact:
-#    kubeadm_master_config: "{{ kubeadm_master_config |
-#    combine ({ 'token' : kubeadm_master_config_token.stdout }) }}"
-#  when: kubeadm_master_config.token is not defined
+#    ClusterConfiguration: "{{ ClusterConfiguration |
+#    combine ({ 'token' : ClusterConfiguration_token.stdout }) }}"
+#  when: ClusterConfiguration.token is not defined
 
-#This is required when proxy is used, and the inventory_hostname is defined with fqdn
-#to ensure the connection to local server is not going via proxy (expecially when applying addons)
-- replace:
+#This is mandatory especially when proxy is used, and the inventory_hostname is defined with fqdn
+#important, in order to ensure the connection to local server is not going via proxy (expecially when applying addons)
+
+- name: update in admin.conf and kubelet.conf the name of primary-master as defined in inventory (e.g. with dns name)
+  replace:
     dest: '{{ item }}'
     regexp: '(\s+)(server: https:\/\/)[A-Za-z0-9\-\.]+:'
-    replace: '\1\2{{ groups["master"][0] }}:'
+    replace: '\1\2{{ master_name }}:'
     #backup: yes
   #when: proxy_env is defined ### and master is defined with fqdn in the inventory file (e.g. master.example.com)
   with_items:
@@ -89,21 +259,11 @@
   #- /etc/kubernetes/scheduler.conf
   tags:
   - init
+  - fqdn
   notify:
   - Restart kubelet
 
-- lineinfile:
-    dest: '{{ item }}'
-    insertafter: "^    - --"
-    line: "    - --cloud-config=/etc/kubernetes/cloud-config"
-  when: kubeadm_master_config.cloudProvider is defined
-  with_items:
-  - /etc/kubernetes/manifests/kube-apiserver.yaml
-  - /etc/kubernetes/manifests/kube-controller-manager.yaml
-  tags:
-  - init
-  notify:
-  - Restart kubelet
+
 
 - name: export KUBECONFIG in master's ~/.bash_profile
   lineinfile: 
@@ -125,21 +285,46 @@
   pause: seconds=10
   changed_when: false
 
-- name: apply master_uncordon when cluster is one machine only
+- name: remove NoSchedule taint from master when cluster is one machine only - using inventory_hostname_short
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
-  shell: 'kubectl uncordon {{ inventory_hostname_short }} '
-  when: groups['all'] | length == 1
+  shell: 'kubectl taint nodes {{ inventory_hostname_short }} {{ item }} --overwrite'
+  when:
+  - groups['all'] | length == 1
+  with_items: #'{{ taints_master }}'
+  - 'node-role.kubernetes.io/master:NoSchedule-'
+  tags:
+  - taints
 
-- name: "sanity - wait for alls pod to be running (besides kube-dns which won't be ready yet on multi machine cluster)"
+- name: "sanity - wait for alls pod to be running (besides kube-dns/coredns which won't be ready yet as overlay network is not yet deployed, and workder nodes are not yet installed (on clusters with more than one machine))"
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
-  shell: "kubectl get --namespace kube-system pods --no-headers | grep -v -w 'Running' | grep -v 'kube-dns' || true "
+  shell: "kubectl get --namespace kube-system pods --no-headers | grep -v -w 'Running' | grep -v 'kube-dns' | grep -v 'coredns' || true "
   register: command_result
   tags:
   - sanity
   until: command_result.stdout == ""
-  retries: 20
-  delay: 3
+  retries: 25
+  delay: 5
   changed_when: false
+
+- name: "sanity - make sure master is up (sometimes the above condition is empty as master is in fact not working..."
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  shell: "kubectl get --namespace kube-system pods --no-headers > /dev/null "
+  tags:
+  - sanity
+  delay: 5
+  changed_when: false
+
+- name: Set coredns replicas to number of masters (a good practice; by default there are 2 coredns)
+  shell: "export KUBECONFIG=/etc/kubernetes/admin.conf; kubectl scale --replicas={{ groups['masters'] | length }} -n kube-system deployment/coredns"
+  when:
+  - groups['masters'] | length > 1
+  - inventory_hostname in groups['primary-master']
+  tags:
+  - scale
+  - scale_dns
+
+
 

@@ -20,11 +20,12 @@
     - nfs_reset
     ignore_errors: yes
 
-  - name: Reset cluster
-    command: /usr/bin/kubeadm reset
+  - name: Reset cluster (kubeadm reset --force)
+    command: /usr/bin/kubeadm reset --force
     ignore_errors: yes
     # TODO: if cluster is installed, but kubedm is no longer available on the machine, we will not have a reset of cluster...
 
+  ### Cleaning full /etc/kubernetes/ ; Starting k8s 1.12 behaves better, at some point we will remove this step:
   - name: ensure old kubeadm config files were removed
     file: state=absent path={{ item }}
     with_items:
@@ -41,11 +42,10 @@
 #    #- /var/lib/etcd # there might be cases 
 #    when: full_kube_reinstall is defined and full_kube_reinstall
 
-
-  - name: ensure old /var/lib/etcd is removed
+  - name: ensure old /var/lib/etcd/member is removed
     file: state=absent path={{ item }}
     with_items:
-    - /var/lib/etcd
+    - /var/lib/etcd/member
     when: etcd_clean | default(true)
 
   - name: systemctl stop kube*.*.slice
@@ -60,7 +60,7 @@
     - kubeadm
     - kubectl
     - kubernetes-cni
-    when: full_kube_reinstall | default (True) #is defined and full_kube_reinstall
+    when: full_kube_reinstall | default (False) #is defined and full_kube_reinstall
     tags:
     - kubelet
     - uninstall
@@ -69,6 +69,8 @@
     systemd: name={{ item }} state=stopped
     with_items:
     - kubelet
+    - keepalived
+    - etcd
     tags:
     - kubelet
     - uninstall

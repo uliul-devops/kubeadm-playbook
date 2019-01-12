@@ -1,35 +1,127 @@
 ---
-- set_fact: kubeadm_token="{{ hostvars[groups['master'][0]]['kubeadm_token'].stdout_lines[0] }}"
-  when: kubeadm_master_config.token is not defined
-  tags:
-  - node
+- name: decide_master_name
+  include_role:
+    name: common
+    tasks_from: decide_master_name
 
-- set_fact: kubeadm_token={{ kubeadm_master_config.token }}
-  when: kubeadm_master_config.token is defined
-  tags:
-  - node
+- name: JoinConfiguration - cloudProvider merging {{ ClusterConfiguration.cloudProvider }} to the JoinConfiguration.nodeRegistration.kubeletExtraArgs
+  set_fact:
+    JoinConfiguration: "{{ JoinConfiguration | combine ( { 'nodeRegistration': {'name': ansible_fqdn } }, recursive=True) }}"
+  when:
+  - custom.networking.fqdn.always or custom.networking.fqdn.node
 
-- name: token to be used is
-  debug: var=kubeadm_token
+- name: add localAPIEndpoint section to the InitConfiguration (if does not exist)
+  set_fact:
+    InitConfiguration: "{{ InitConfiguration | combine ( { 'localAPIEndpoint': InitConfiguration.localAPIEndpoint | default ({}) } ) }}"
 
-
-- name: "Wait 300 seconds for master at {{ groups['master'][0] }}:{{ kubeadm_master_config.api.bindPort | default (6443) }} to become open"
+- name: "Wait 300 seconds for master at {{ master_name }}:{{ InitConfiguration.localAPIEndpoint.bindPort | default (6443) }} to become open (MasterHA)"
   wait_for:
-    port: "{{ kubeadm_master_config.api.bindPort | default (6443) }}"
-    host: "{{ groups['master'][0] }}"
+    port: "{{ InitConfiguration.localAPIEndpoint.bindPort | default (6443) }}"
+    host: "{{ master_name }}"
     delay: 1
     timeout: 300
+  run_once: yes
 
-- name: Join cluster using kubeadm join {{ groups['master'][0] }}:{{ kubeadm_master_config.api.bindPort | default (6443) }} --token {{ kubeadm_token }} {{ kubeadm_join_args | default(" ") }}
-  command: /usr/bin/kubeadm join {{ groups['master'][0] }}:{{ kubeadm_master_config.api.bindPort | default (6443) }} --token {{ kubeadm_token }} {{ kubeadm_join_args | default(" ") }}
+### TOKEN:
+- name: set kubeadm_token to the value from InitConfiguration
+  set_fact: kubeadm_token={{ InitConfiguration.bootstrapTokens[0].token }}
+  when:
+  - InitConfiguration.bootstrapTokens is defined
+  - InitConfiguration.bootstrapTokens[0].token is defined
+  - JoinConfiguration.discovery is not defined or JoinConfiguration.discovery.bootstrapToken is not defined or JoinConfiguration.discovery.bootstrapToken.token
+
+- name: when defined, use JoinConfiguration.discovery.bootstrapToken.token on priority
+  set_fact: kubeadm_token={{ JoinConfiguration.discovery.bootstrapToken.token }}
+  when:
+  - JoinConfiguration.discovery.bootstrapToken.token is defined
+
+- name: when there is JoinConfiguration.discovery.bootstrapToken.token or InitConfiguration.bootstrapTokens[0].token and no hash, add skip hash
+  set_fact:
+    JoinConfiguration: "{{ JoinConfiguration | combine ( { 'discovery': { 'bootstrapToken': { 'unsafeSkipCAVerification': 'True' } } }, recursive=True) }}"
+  when:
+  - JoinConfiguration.discovery.bootstrapToken.token is defined or InitConfiguration.bootstrapTokens is defined
+  - JoinConfiguration.discovery.bootstrapToken.token is defined or InitConfiguration.bootstrapTokens[0].token is defined 
+  - JoinConfiguration.discovery.bootstrapToken.CACertHashes is not defined
+
+### Generate a token&hash on master and use them
+- block:
+  - set_fact:
+      env_kc: '{{ proxy_env |default({}) | combine ({"PATH" : "/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin"  }) | combine ({"KUBECONFIG" :"/etc/kubernetes/admin.conf"}) }}'
+
+  - name: generate a join token on primary-master
+    shell: kubeadm token create --description "kubeadm-playbook-node-joining-token" --ttl 15m --print-join-command  | awk '{print $5}{print $7}'
+    environment: '{{env_kc}}'
+    # environment -> is required due to a k8s bug which makes kubeadm need internet to generate a token. setting version is not allowed
+    # Optionally using "--config /etc/kubernetes/kubeadm-master.conf" to get rid of the message that it tries to connect to internet for version
+    register: kubeadm_token_whash_n
+    delegate_to: "{{groups['primary-master'][0]}}"
+    run_once: yes
+    when: 
+    - InitConfiguration is not defined or InitConfiguration.bootstrapTokens is not defined or InitConfiguration.bootstrapTokens[0].token is not defined
+    changed_when: false
+
+  - name: add API server JoinConfiguration.discovery.bootstrapToken.apiServerEndpoint
+    set_fact:
+      JoinConfiguration: "{{ JoinConfiguration | combine ( { 'discovery': { 'bootstrapToken': { 'apiServerEndpoint': [master_name + ':' + InitConfiguration.localAPIEndpoint.bindPort | default (6443) | string ] } } }, recursive=True) }}"
+
+  - name: add discovery token hash to JoinConfiguration.discovery.bootstrapToken.CACertHashes
+    set_fact:
+      JoinConfiguration: "{{ JoinConfiguration | combine ( { 'discovery': { 'bootstrapToken': { 'CACertHashes': [kubeadm_token_whash_n.stdout_lines[1]] } } }, recursive=True) }}"
+
+  ### Add token must be the last in the block, otherwise condition (JoinConfiguration.discovery.bootstrapToken.token is not defined) resolves to false...
+  - name: add token to the JoinConfiguration.discovery.bootstrapToken.token
+    set_fact:
+      JoinConfiguration: "{{ JoinConfiguration | combine ( { 'discovery': { 'bootstrapToken': { 'token': kubeadm_token_whash_n.stdout_lines[0] } } }, recursive=True) }}"
+
+  when:
+  - JoinConfiguration.discovery is not defined or JoinConfiguration.discovery.bootstrapToken is not defined or JoinConfiguration.discovery.bootstrapToken.token is not defined
+  - InitConfiguration.bootstrapTokens is not defined or InitConfiguration.bootstrapTokens[0].token is not defined
+  tags:
+  - token
+
+- name: Add the InitConfiguration.bootstrapTokens[0] to the JoinConfiguration
+  set_fact:
+    JoinConfiguration: "{{ JoinConfiguration | combine ( { 'discovery': { 'bootstrapToken': { 'token': kubeadm_token } } }, recursive=True) }}"
+  when:
+  - JoinConfiguration.discovery is not defined or JoinConfiguration.discovery.bootstrapToken is not defined or JoinConfiguration.discovery.bootstrapToken.token is not defined
+  tags:
+  - token
+
+### Cloud Config
+- name: JoinConfiguration - cloudProvider merging {{ ClusterConfiguration.cloudProvider }} to the JoinConfiguration.nodeRegistration.kubeletExtraArgs
+  set_fact:
+    JoinConfiguration: "{{ JoinConfiguration | combine ( { 'nodeRegistration': {'kubeletExtraArgs': {'cloud-provider': ClusterConfiguration.cloudProvider, 'cloud-config': '/etc/kubernetes/cloud-config' }  } }, recursive=True) }}"
+  when:
+  - ClusterConfiguration is defined
+  - ClusterConfiguration.cloudProvider is defined
+  - ( ClusterConfiguration.apiVersion >= "kubeadm.k8s.io/v1alpha3" ) or (ClusterConfiguration.apiVersion == "kubeadm.k8s.io/v1")
+
+### Write configs to disk
+- name: Writing JoinConfiguration KubeProxyConfiguration and KubeletConfiguration to /etc/kubernetes/kubeadm-node.conf
+  copy:
+    dest: /etc/kubernetes/kubeadm-node.conf
+    force: yes
+    content: |
+      {{ JoinConfiguration | to_nice_yaml }}
+      ---
+      {{ KubeProxyConfiguration | to_nice_yaml }}
+      ---
+      {{ KubeletConfiguration | to_nice_yaml }}
+#      ---
+#      {{ ClusterConfiguration | to_nice_yaml }}
+
+### Join nodes to cluster
+- name: Join cluster using kubeadm join --config /etc/kubernetes/kubeadm-node.conf
+  #command: /usr/bin/kubeadm join {{ master_name }}:{{ InitConfiguration.localAPIEndpoint.bindPort | default (6443) }} --config /etc/kubernetes/kubeadm-node.conf
+  command: /usr/bin/kubeadm join --config /etc/kubernetes/kubeadm-node.conf
+  #{{ node_name_setting | default (" ") }} --token {{ kubeadm_token }} {{ kubeadm_join_args | default(" ") }}
   tags:
   - init
-  - node
 #  args:
 #  creates: /etc/kubernetes/kubelet.conf
 
 - name: wait for /etc/kubernetes/kubelet.conf to be created
-  wait_for: 
+  wait_for:
     path: /etc/kubernetes/kubelet.conf
     state: present
     timeout: 30
@@ -37,20 +129,18 @@
   changed_when: false
   tags:
   - init
-  - node
 
 #This is required when proxy is used, and the inventory_hostname is defined with fqdn
 #to ensure the connection to local server is not going via proxy (expecially when applying addons)
-- name: replace master api server address to {{ groups["master"][0] }} in the /etc/kubernetes/kubelet.conf
+- name: replace master api server address to {{ master_name }} in the /etc/kubernetes/kubelet.conf
   replace:
     dest: /etc/kubernetes/kubelet.conf
     regexp: '(\s+)(server: https:\/\/)[A-Za-z0-9\-\.]+:'
-    replace: '\1\2{{ groups["master"][0] }}:'
+    replace: '\1\2{{ master_name }}:'
     #backup: yes
   #when: proxy_env is defined and master is defined with fqdn in the inventory file (e.g. master.example.com)
   tags:
   - init
-  - node
   notify:
   - Restart kubelet
 
@@ -64,7 +154,7 @@
 #     retries: 40
 #     delay: 3
 #     changed_when: false
-    
+
 #   - name: Get nodes
 #     command: kubectl get nodes
 #     register: command_result
@@ -76,20 +166,20 @@
 #     changed_when: false
 
 #   - name: Check all nodes were registered
-#     shell: "/usr/bin/test $(kubectl get nodes --no-headers | grep -ow Ready | wc -l) >= {{ groups['node'] | length + groups['master'] | length }}"
+#     shell: "/usr/bin/test $(kubectl get nodes --no-headers | grep -ow Ready | wc -l) >= {{ groups['nodes'] | length + groups['masters'] | length }}"
 #     register: command_result
 #     retries: 10
 #     delay: 3
 #     until: command_result | success
 #     changed_when: false
- 
+
 #   environment:
 #     KUBECONFIG: /etc/kubernetes/kubelet.conf
 #   tags:
 #   - node
 #   - node_sanity
 
-### 
+###
 - name: export KUBECONFIG in nodes' ~/.bash_profile
   lineinfile:
     dest: ~/.bash_profile
@@ -98,6 +188,3 @@
     create: yes
     regexp: '^export KUBECONFIG=.*'
   when: shell is undefined or shell == 'bash'
-  tags:
-  - node
-
