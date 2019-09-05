@@ -1,10 +1,13 @@
 # Update Status of the project: Stable
 [kubeadm-playboook ansible project's code is on Github](https://github.com/ReSearchITEng/kubeadm-playbook)
 
+# Quick explanation
+https://medium.com/@re.search.it.eng/batteries-included-kubernetes-for-everyone-bccf9b8558dd
+
 # kubeadm based all in one kubernetes cluster installation (and addons) using Ansible
 Tested on for all Centos/RHEL 7.2+ till 7.6 and Ubuntu 16.04 (both with overlay2 and automatic docker_setup).    
 Optionally, when docker_setup: True, this project will also setup the docker on the host if does not exist.     
-Actively used on a daily basis and tested with k8s starting 1.7 till 1.14.    
+Actively used on a daily basis and tested with k8s starting 1.7 till 1.15.    
 
 ## Targets/pros&cons
 Kubeadm simplifies drastically the installation, so for BYO (vms,desktops,baremetal), complex projects like kubespray/kops are not required any longer.
@@ -154,10 +157,8 @@ Using vagrant keeping NAT as 1st interface (usually with only one machine) was n
 There was no focus on this option as it's more complicated to use afterwards: one must export the ports manually to access ingresses like dashboard from the browser, and usually does not support more than one machine.
 
 # kubeadm-ha
-While Kubeadm does not make multimaster (aka HA) setup easy (yet), thanks the comunity there we have it!
-Starting our playbook for v1.11, we support master HA !
- Kubeadm will support ha OOB later -> as per https://github.com/kubernetes/kubeadm/issues/546; For now we do it using some work-arounds.
-Our HA work is based on projects like: https://github.com/mbert/kubeadm2ha ( and https://github.com/sv01a/ansible-kubeadm-ha-cluster and/or github.com/cookeem/kubeadm-ha ).
+Starting 1.14/1.15, kubeadm supports multimaster (aka HA) setup easy (out of the box)
+(Our playbook supports master HA also for older v1.11-v1.13, thanks to projects like: https://github.com/mbert/kubeadm2ha ( and https://github.com/sv01a/ansible-kubeadm-ha-cluster and/or github.com/cookeem/kubeadm-ha ).
 
 # How does it compare to other projects:
 

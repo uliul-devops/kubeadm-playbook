@@ -5,14 +5,41 @@ CLUSTER_NAME: demok8s  # used only for defining the clusterConfiguration and joi
 custom:
   networking:
     dnsDomain: "{{ CLUSTER_NAME }}.myk8s.corp.example.com"  # For MasterHA, if you have dns, put the desired cluster domain here. If no DNS change possible on your side, and you want MasterHA, fix the below 2 values accordinly
+
+    ######
+    ## masterha_* params are requried when you have MasterHA (meaning when your inventory has "secondary-masters" section not-empty)
+    ## Your setup can either use a LoadBalancer (usually a hw one), 
+    ## or use a VIP address which keepalived will manage (move the address from one master to another as needed)
+
+    ## Decide on one of 2 the masterha_types possible:
+    # "vip" #Choose VIP and you'll have keepalived instaleld and cofigured for the masterha_ip below.
+    # "lb" #Choose lb when you have a MasterHA LB which load-balances across all your masters, on api port (default 6443) 
+    #      # Make sure your LB is setup to forward requests to a specific master ONLY when api port /healthz on that host returns status 200 
+    masterha_type: "lb" # "vip" # or "lb"
+    masterha_ip: "10.1.2.3" #| default('') }}"  # Important when you have MasterHA;  # IP of either your LB or the VIP to be used.
+    ## masterha_fqdn is usually the dns name of masterha_ip above. (We cannot get it automatically in ansible...)
+    ## This value is important in order to set apiServerCertSANs in the certs correctly
     masterha_fqdn: "master-{{ CLUSTER_NAME }}.corp.example.com"  # Important when you have MasterHA, in order to set apiServerCertSANs correctly
-    masterha_vip: "10.1.2.3" #| default('') }}"  # Important when you have MasterHA
-    #masterha_fqdn: "{{ lookup('dig', masterha_vip, 'qtype=PTR') }}" # but requires some pip modules on host...
+    #masterha_fqdn: "{{ lookup('dig', masterha_ip, 'qtype=PTR') }}" # but requires some pip modules on host...
+
+    #masterha_bindPort: 6443 #default is 6443; We recommend to keep it 6443.
+    ### end of masterha topic
+
+    ## When masterha_type is set to "vip", keepalived is deployed automatically. Options to deploy it via linux package (rpm/deb) or using a docker image.
+    ## if you move from one type to another, please make sure you manually remove the previous setup 
+    ## E.g. moving from package to docker, manually do: systemctl stop keepliaved; systemctl disable keepalived
+    ## E.g. moving from docker to package, manually do: docker rm -f keepalived
+    ## Can be either 'docker' or 'package' or 'provided' (when already installed outside of this playbook; this playbook will generate the configuration and check script)
+    masterha_vip_keepalived_deploy_type: docker
+    masterha_vip_keepalived_docker_image: osixia/keepalived:2.0.17 # 2.0.17+; older version do not have curl
+
     fqdn: # decide where to force use fqdn for non masterha and nodes. When set to false, it will use the name as defined in the inventory file
       always: false # makes all the below true
       master: true  # when true, actions like wait/join will be done against dns name instead of IP
       node: false   # when true, the join command will have --node-name set to fqdn. When false, k8s will set based on how node machine answers to the hostname command
-      etcd: false   # Relevant for MasterHA case(more than 1 node in the master group), ignored otherwise; When true, the etcd endpoints will be with fqdn, IP address otherwise
+
+#Define network for K8S services 
+SERVICE_NETWORK_CIDR: 10.96.0.0/12
 
 # Select pod Network. One may add mode simply by adding the deployment url and pod netwrod cidr it needs
 podNetwork: 'flannel'
@@ -74,5 +101,8 @@ k8s_network_addons_urls:
 ## Weave: #https://www.weave.works/docs/net/latest/kubernetes/kube-addon/ 
  #- https://cloud.weave.works/k8s/net?k8s-version={{ClusterConfiguration.kubernetesVersion}}&{{POD_NETWORK_CIDR | default ('env.IPALLOC_RANGE=10.32.0.0/12') }}
  #- "https://cloud.weave.works/k8s/net?k8s-version={{ClusterConfiguration.kubernetesVersion}}&env.IPALLOC_RANGE={{POD_NETWORK_CIDR | default ('10.32.0.0/12') }}"
+# OR
+## kube-router
+ #- https://raw.githubusercontent.com/cloudnativelabs/kube-router/master/daemonset/kube-router-all-service-daemonset.yaml
 #####
 
