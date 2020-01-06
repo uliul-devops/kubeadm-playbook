@@ -6,11 +6,26 @@
   become: yes
   become_method: sudo
   pre_tasks:
-  - name: Install python2 for Ansible (usually required on ubuntu, which defaults to python3) # Alternativelly, for Ubuntu machines, define var: ansible_python_interpreter=/usr/bin/python3
+  ## It would be best to have ansible already installed on all machines. 
+  ## But if it is not, we'll try to do it:
+  - name: when no python2, install python2 for Ansible<2.8 (usually required on ubuntu, which defaults to python3) # Alternativelly, for Ubuntu machines, define var: ansible_python_interpreter=/usr/bin/python3
     raw: test -e /usr/bin/python || (apt -y update && apt install -y python-minimal) || (yum install -y python2 python-simplejson)
     register: output
     changed_when: output.stdout != ""
     tags: always
+    when:
+    - ansible_version.full is version('2.8', '<')
+    - ( ansible_python_interpreter is not defined or ansible_python_interpreter == "/usr/bin/python" )
+    # ansible_os_family conds. cannot be used as this is before gathering facts (where ansible is required)
+
+  - name: when no python(2/3), install python3(Debian) python2(RedHat) for Ansible>=2.8 # Alternativelly, for Ubuntu machines, define var: ansible_python_interpreter=/usr/bin/python3
+    raw: test -e /usr/bin/python || (apt -y update && apt install -y python3-minimal) || (yum install -y python2 python-simplejson)
+    register: output
+    changed_when: output.stdout != ""
+    tags: always
+    when:
+    - ansible_version.full is version('2.8', '>=') or ( ansible_python_interpreter is defined and ansible_python_interpreter == "/usr/bin/python3" )
+    # ansible_os_family conds. cannot be used as this is before gathering facts (where ansible is required)
 
   - setup: # aka gather_facts
     tags: always # required for tags, see ansible issue: #14228
@@ -50,18 +65,6 @@
   - { role: tools, task: weave_reset, tags: [ 'reset', 'node_reset', 'network_reset', 'weave_reset', 'weave' ], when: "inventory_hostname not in groups['masters']" }
   - { role: common, task: all, tags: [ 'common', 'install', 'common_install', 'node_install', 'node' ], when: "inventory_hostname not in groups['masters']" }
 
-## etcd -> reset and install common part (for all etcds, when not in the same group with master)
-# starting 1.14 no longer supported
-# - hosts: etcd
-#   become: yes
-#   become_method: sudo
-#   tags:
-#   - etcd
-#   roles:
-#   - { role: tools, task: reset, tags: [ 'reset', 'etcd_reset' ], when: "inventory_hostname not in groups['masters']" }
-#   - { role: tools, task: weave_reset, tags: [ 'reset', 'etcd_reset', 'network_reset', 'weave_reset', 'weave' ], when: "inventory_hostname not in groups['masters']" }
-#   - { role: common, task: all, tags: [ 'common', 'install', 'common_install', 'etcd_install', 'node' ], when: "inventory_hostname not in groups['masters']" }
-    
 ## master -> reset and install common part (for all masters - and sometimes etcd when colocated with masters)
 - hosts: masters
   become: yes
@@ -73,21 +76,7 @@
   - { role: tools, task: weave_reset, tags: [ 'reset', 'master_reset', 'network_reset', 'weave', 'weave_reset' ] }
   - { role: common, task: all, tags: [ 'common', 'install', 'common_install', 'master_install'] }
 
-## etcd -> install etcd (when HA)
-# starting 1.14 no longer supported
-# - hosts: etcd
-#   become: yes
-#   become_method: sudo
-#   any_errors_fatal: yes
-#   tags:
-#   - etcd
-#   - install
-#   - etcd_install
-#   - ha
-#   roles:
-#   - { role: etcd, tags: [ 'install', 'etcd_install', 'ha', 'etcd'], when: "groups['masters'] | length > 1" } 
-
-## master -> install keepalived and deploy etcd client certs on masters (relevat if HA)
+## master -> install keepalived on masters (relevat if HA)
 - hosts: masters
   become: yes
   become_method: sudo
@@ -98,13 +87,11 @@
   - ha
   - master_install
   roles:
-  #- { role: keepalived, tags: [ 'master', 'install', 'master_install', 'ha', 'keepalived'], when: ( groups['masters'] | length > 1 ) and ( custom.networking.masterha_type |default('vip') != 'lb' ) }
   - role: keepalived
     tags: [ 'master', 'install', 'master_install', 'ha', 'keepalived']
     when: 
     - ( groups['masters'] | length ) > 1 
     - ( custom.networking.masterha_type | default('vip') ) == 'vip'
-  #1.14 removed: - { role: client-certs, tags: [ 'master', 'install', 'master_install', 'ha', 'client-certs'], when: "groups['masters'] | length > 1" }
 
 - hosts: primary-master 
   name: primary-master (or master in general) - it applies to both ha and non-ha

@@ -11,7 +11,7 @@
 
 - block:
   - name: Install in CentOS/RHEL docker (if does not exist)
-    package: state=installed name={{ item }} #-{{version}}
+    package: state=present name={{ item }} #-{{version}}
     environment: '{{ proxy_env | default ({}) }}'
     with_items:
     - docker
@@ -22,7 +22,7 @@
     - Restart docker
 
   - name: Install in debian docker (if does not exist)
-    package: state=installed name={{ item }} #-{{version}}
+    package: state=present name={{ item }} #-{{version}}
     environment: '{{ proxy_env | default ({}) }}'
     with_items:
     - docker.io # this is ubuntu's official version. Stable and tested
@@ -117,21 +117,41 @@
     - Restart docker
 
   - name: set https_proxy in docker (Debian)
+    file:
+      path: /etc/systemd/system/docker.service.d/
+      state: directory
+    when: proxy_env is defined and  ansible_os_family == "Debian"
+    tags:
+    - docker
+
+  - name: set https_proxy in docker (Debian) - section
     lineinfile:
-      name: /etc/default/docker
+      name: /etc/systemd/system/docker.service.d/http-proxy.conf
       state: present
-      line: "https_proxy={{proxy_env.https_proxy | default ([]) }}"
+      create: yes
+      line: "[Service]"
+    when: proxy_env is defined and  ansible_os_family == "Debian"
+    tags:
+    - docker
+    notify:
+    - Restart docker
+    
+  - name: set https_proxy in docker (Debian) - https 
+    lineinfile:
+      name: /etc/systemd/system/docker.service.d/http-proxy.conf
+      state: present
+      line: 'Environment="https_proxy={{proxy_env.https_proxy | default ([]) }}"'
     when: proxy_env is defined and  ansible_os_family == "Debian"
     tags:
     - docker
     notify:
     - Restart docker
 
-  - name: set http_proxy in docker (Debian)
+  - name: set http_proxy in docker (Debian) - http
     lineinfile:
-      name: /etc/default/docker
+      name: /etc/systemd/system/docker.service.d/http-proxy.conf
       state: present
-      line: "http_proxy={{proxy_env.http_proxy | default ([]) }}"
+      line: 'Environment="http_proxy={{proxy_env.http_proxy | default ([]) }}"'
     when: proxy_env is defined and  ansible_os_family == "Debian"
     tags:
     - docker
@@ -140,7 +160,7 @@
 
   - name: set no_proxy in docker (Debian)
     lineinfile:
-      name: /etc/default/docker
+      name: /etc/systemd/system/docker.service.d/http-proxy.conf
       state: present
       line: "no_proxy={{proxy_env.no_proxy | default ([]) }}"
     when: proxy_env is defined and  ansible_os_family == "Debian"
@@ -172,7 +192,7 @@
   when: ( docker_setup is defined and docker_setup=="force" ) or
         ( (docker_setup is not defined or docker_setup=="auto" ) and docker_result is failed )
 
-#- name: Use overlay docker storage driver (note: overlay2 is not currently supported by k8s)
+#- name: Use overlay docker storage driver
 #  lineinfile:
 #    dest: /etc/sysconfig/docker-storage
 #    regexp: '^DOCKER_STORAGE_OPTIONS='

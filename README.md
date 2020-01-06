@@ -4,10 +4,41 @@
 # Quick explanation
 https://medium.com/@re.search.it.eng/batteries-included-kubernetes-for-everyone-bccf9b8558dd
 
-# kubeadm based all in one kubernetes cluster installation (and addons) using Ansible
-Tested on for all Centos/RHEL 7.2+ till 7.6 and Ubuntu 16.04 (both with overlay2 and automatic docker_setup).    
-Optionally, when docker_setup: True, this project will also setup the docker on the host if does not exist.     
-Actively used on a daily basis and tested with k8s starting 1.7 till 1.15.    
+# What is it:
+For 3 years we keep on gathering best guidelines and growing this project for best kubernetes **cluster installation + addons**. It's gluing: kubeadm, offical helm charts for various addons, fine-tunings from docs and best practices.
+
+All based purely on kubeadm and official helm charts.    
+It tries to bring together most (if not all) the steps to get from a freshly installed linux to a working k8s cluster.    
+Its vision is to find and integrate the best tools out there (while using KISS priciple).    
+
+# Why
+Going beyond minikube, making your own (usually on prem) k8s cluster (with the usuall addons installed) is still too hard or needlesly complex. Kubeadm is so strong now, that complex projects don't make sense.   
+The we felt that what is missing is getting things before and after the cluster installation, to get an initial (but reasonable) platform up. 
+
+# What it makes it different:
+- pure kubeadm based (all needless complexity removed); the stronger kubeadm will be, the smaller this project!
+- kubernetes cluster platform: not only k8s, but also the importand addons
+- this project does not hold any "custom" addon, everything that is installed is fetched directly their official repos (mostly helm repos)
+- drives users towards good practices: e.g. segregate nodes in 3 categories (when possible): masters, infra, compute; (infra holds ingress controller, prometheus, grafana, and similar support tools)
+- optionally, when docker_setup enabled, this project will also setup the docker with known kernel params for os (those from the k8s docs).
+- focused on "on-prem" deployments (but still accepts anything kubeadm can do); (vmware vsphere storage integration is actively used).
+- generates any cluster size, from 1 machine cluster (dev env) to productions sizes: all controlled by the provided inventory.
+- scale UP or DOWN post deployment (e.g. start small with 1 vm, then add nodes, then make multi-master) -> all without downtime thanks to kubeadm.
+- Master HA & ingress setups accepts either: VIPs (using keepalived) or Hardware LB (when available);
+- enterprise-friendly: fully tested with http_proxy and private docker registry (usually private nexus registry proxy registry of docker.io, quay.io, k8s.gcr.io, etc; private mirror hostname&port fully configurable in this project)
+- actively tested on both Ubuntu/Debian and CentOS/RHEL. 
+- any helm chart can be configured/added/removed via addons.yml
+(more detailed comparison with other solutions towards the end of this readme) 
+
+# What is in plan 
+1. Authentication via LDAP (in plan KeyCloak); integrate it in dashboard, grafana, etc.
+2. Move from heapster to metrics server (once it will be stable)
+3. Logging stack (e.g. EFK - currently helm charts are not fully stable)
+(PRs are welcome :)
+
+# Since when
+Started years back. Battle tested on for all Centos/RHEL 7.2+ till 7.6 and Ubuntu 16.04,18.04,19.10 (both with overlay2 and automatic docker_setup).    
+Actively used on a daily basis and tested with k8s starting 1.7 till 1.16.    
 
 ## Targets/pros&cons
 Kubeadm simplifies drastically the installation, so for BYO (vms,desktops,baremetal), complex projects like kubespray/kops are not required any longer.
@@ -20,14 +51,17 @@ The project is for those who want to create&recreate k8s cluster using the offic
 - prepares your machines (e.g. kernel params like: net.bridge.bridge-nf-call-iptables, etc.)
 - it tries to use modern methods of deploying the "addons". E.g. heapster, ingress, prometheus, etc -> all via helm. Pure and clean:
 - Ingresses (via helm chart)
-- Persistent storage (ceph or vsphere)
+- Persistent storage (vsphere/ceph/nfs) (vsphere up to date, rook.io (ceph) needs updates; NFS not actively tested) 
 - dashboard (via helm chart)
 - heapster (via helm chart)
-- support proxy
+- supports proxy
 - modular, clean code, supporting multiple activies by using ansible tags (e.g. add/reset a subgroup of nodes).
 - optionally help configuring container engine (e.g. docker)
 
 This project targets to get a fully working environment in matter of minutes on any hw: baremetal, vms (vsphere, virtualbox), etc.    
+
+### What it does not do:
+- k8s version upgrades: while many of its roles can be used for an upgrade, upgrade should be done using kubeadm tool. Kubeadm upgrade is pretty clear and simple, there is no need for much automation around it. If you think otherwise, let us know.   
 
 ### PROS:
 - quick (~10 min) full cluster installation
@@ -35,14 +69,14 @@ This project targets to get a fully working environment in matter of minutes on 
 - applies fixes for quite few issues currently k8s installers have
 - deploys plugins to all creation of dynamical persistent volumes via: vsphere, rook or self deployed NFS
 - kubeadm is the only official tool specialized to install k8s
-- proxy or even no internet access required (when there is internal registry)
+- proxy is supported; It can work even no internet access required (when there is internal registry)
 
 ### CONS/future versions:
-- for HA Master, Only VIP is supported -> LB support for HA Master was not tested (try to use v1.14 and above).
-- While for installing the cluster there is no need for internet access, the addons which come as helm charts by default look for their images on the internet. One may need to update the group_vars/all/addons.yaml to point to local registry version of the image.
+- old k8s versions (13 and older): for HA Master, Only VIP is supported -> LB support for HA Master was not tested (try to use v1.14 and above).
+- While for installing the cluster there is no need for internet access, the addons which come as helm charts by default look for their images on the internet (but charts have to be either cached or come from an internal helm repo). To take images from on-prem, please update the group_vars/all/addons.yaml to point to local registry version of the image.
 
 ## Prerequisites:
-- ansible min. 2.3 (but higher is recommeneded. Tested on 2.5+)
+- ansible min. 2.5 (but higher is recommeneded. Tested on 2.5-2.8+)
 - For a perfect experience, one should at least define a wildcard dns subdomain, to easily access the ingresses. The wildcard can pointed to the master (as it's quaranteed to exists).    
 Note: dashboard will by default use the master machine, but also deploy under the provided domain (in parallel, only additional ingress rule)
 - if docker_setup is True, it will also attempt to define your docker and set it up with overlay2 storage driver (one needs CentOS 7.4+)
@@ -105,11 +139,11 @@ Read the site.yml. Here are also some explanations of important steps:
 - install nodes  (role/tag: node)
 - install network, helm, ingresses, (role/tag: post_deploy)
 
-## Add manage (add/reinstall) only one node (or set of nodes):
-- modify inventory (**hosts** file), and leave the master intact, but for nodes, keep *ONLY* the nodes to be managed (added/reset)
-- ``` ansible-playbook -i hosts site.yml --tags node ```
+## Add manage (add/reinstall) nodes:
+- modify inventory (**hosts** file), and leave the primary-master intact, but for nodes, keep *ONLY* the nodes to be managed (added/reset)
+- ``` ansible-playbook -i hosts site.yml --tags node ``` ; More in the docs section.
 
-## To remove a specific node (drain and afterwards kube reset, etc)
+## To remove a specific node (drains and afterwards kube resets, etc)
 - modify inventory (**hosts** file), and leave the master intact, but for nodes, keep *ONLY* the nodes to be removed
 - ``` ansible-playbook -i hosts site.yml --tags node_reset ```
 
@@ -124,6 +158,10 @@ The output should have already presented the required info (or run again: `ansib
 The Dashboard is set on the master host, and, additionally, if it was set, also at something like: http://dashboard.cloud.corp.example.com  (depending on the configured selected domain entry), and if the wildcard DNS was properly set up *.k8s.cloud.corp.example.com pointing to master machine public IP).
 
 e.g.  ``` curl -SLk 'http://k8s-master.example.com/#!/overview?namespace=_all' | grep browsehappy ```
+
+Dashboard is also listening on primary hostname, port 443 (or similar if ingress helm params were changed).   
+E.g., if your primary-master is vm01.com, browse: https://vm01.com:443/    
+Note: The http version (http://vm01.com:80/) will ask for token.
 
 For testing the Persistent volume, one may use/tune the files in the demo folder.
 ```shell
@@ -140,7 +178,8 @@ For LB, one may want to check also:
 - https://github.com/kubernetes/contrib/tree/master/service-loadbalancer
 
 # DEMO:
-Installation demo k8s 1.7.8 on CentOS 7.4: [kubeadm ansible playbook install demo asciinema video](https://asciinema.org/a/Ii7NDu3eL9DsuM1fEFM9PMVTM)
+Installation demo k8s 1.16 on Ubuntu 18.04:
+[![kubeadm ansible playbook install demo asciinema video - demo single machine Ubuntu k8s 1.16](https://asciinema.org/a/278017.svg)](https://asciinema.org/a/278017)
 
 ## Vagrant 
 For using vagrant on one or multiple machines with bridged interface (public_network and ports accessible) all machines must have 1st interface as the bridged interface (so k8s processes will bind automatically to it). For this, use this script: vagrant_bridged_demo.sh.
@@ -157,12 +196,12 @@ Using vagrant keeping NAT as 1st interface (usually with only one machine) was n
 There was no focus on this option as it's more complicated to use afterwards: one must export the ports manually to access ingresses like dashboard from the browser, and usually does not support more than one machine.
 
 # kubeadm-ha
-Starting 1.14/1.15, kubeadm supports multimaster (aka HA) setup easy (out of the box)
+Starting 1.14/1.15, kubeadm supports multimaster (aka HA) setup easy (out of the box), so no special setup.
 (Our playbook supports master HA also for older v1.11-v1.13, thanks to projects like: https://github.com/mbert/kubeadm2ha ( and https://github.com/sv01a/ansible-kubeadm-ha-cluster and/or github.com/cookeem/kubeadm-ha ).
 
 # How does it compare to other projects:
 
-## Kubeadm -> the official k8s installer (yet to be GA).
+## Kubeadm -> the official k8s installer
 
 With kubeadm-playbook we are focus only kubeadm. 
 **Pros:**
@@ -171,8 +210,8 @@ With kubeadm-playbook we are focus only kubeadm.
 - self hosted deployment, making upgrades very smooth ; Here is a KubeCon talk presenting even more reasons to go with self-hosted k8s: https://www.youtube.com/watch?v=jIZ8NaR7msI
 
 **Cons:**
-- currenlty in beta (to be GA expected soon)
-- no HA yet (expected in next release v1.10)
+- k8s cluster ugprades are not (yet) in plan, (as kubeadm upgrade is too simple (and sensitive) to need automation)
+- when you run the playbook against an existing cluster, by default it will rebuild the entire cluster. Alternativelly, one has to use the ansible "--tags" to specify what exactly is desired (E.g. `ansible-playbook -i hosts -v site.yml --tags post_deploy` )
 
 ## Other k8s installers
 Similar k8s install on physical/vagrant/vms (byo - on premises) projects you may want to check, but all below are without kubeadm (as opposed to this project)
@@ -183,6 +222,10 @@ Similar k8s install on physical/vagrant/vms (byo - on premises) projects you may
 - https://github.com/gluster/gluster-kubernetes/blob/master/vagrant/ -> it's much more simple, no ingress, helm, addons, proxy support, and persistent volumes only using glusterfs. Entire project is only focused on CentOS.
 - https://github.com/kubernetes-incubator/kubespray & https://github.com/kubernetes/kops (amazon) -> Neither of them used the official installtion tool: kubeadm; Updates: as of 2019 kubespray accepts kubeadm (to be checked if kubespray was fully redesigned around kubeadm or adopted as an option). As of May 2019: our projects accepts also master-HA using only kubeadm 1.14, with no other "magic" around.
 
+## Bonus goodies:
+other_tools/ hold scripts like k8s cli which installs easily kubectx, krew, kubeval, etc.    
+The docs folder hold info on how to secure cluster using operators in an elegant manner (along with aqua's set of security tests)    
+
 PRs are accepted and welcome.
 
 PS: work inspired from: @sjenning - and the master ha part from @mbert. PRs & suggestions from: @carlosedp - Thanks.
@@ -192,3 +235,4 @@ PS: work inspired from: @sjenning - and the master ha part from @mbert. PRs & su
 Our story: https://medium.com/@re.search.it.eng/batteries-included-kubernetes-for-everyone-bccf9b8558dd
 
 License: Public Domain 
+

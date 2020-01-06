@@ -2,7 +2,7 @@
 ### ntpd:
 - block:
   - name: ntpd and ntpdate | it is mandatory to have the time from all machines in sync
-    package: state=installed name={{ item }}
+    package: state=present name={{ item }}
     environment: '{{ proxy_env | default ({}) }}'
     with_items:
     - ntp
@@ -24,6 +24,10 @@
     systemd: name=ntp state=restarted enabled=yes
     when: ansible_os_family == "Debian"
 
-  when: ntp_setup is defined and ntp_setup
+  when: 
+  - ntp_setup is defined
+  - ntp_setup 
+  - ntp_package is defined
+  - ntp_package == "ntp"
   tags:
   - ntp
