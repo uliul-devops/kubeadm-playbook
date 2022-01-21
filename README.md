@@ -5,19 +5,20 @@
 https://medium.com/@re.search.it.eng/batteries-included-kubernetes-for-everyone-bccf9b8558dd
 
 # What is it:
-For 3 years we keep on gathering best guidelines and growing this project for best kubernetes **cluster installation + addons**. It's gluing: kubeadm, offical helm charts for various addons, fine-tunings from docs and best practices.
+For 3 years we keep on gathering best guidelines and growing this project for best kubernetes **cluster installation + addons**. 
+It's gluing: pure kubeadm, offical helm charts for various addons, fine-tunings from docs and best practices.
 
 All based purely on kubeadm and official helm charts.    
 It tries to bring together most (if not all) the steps to get from a freshly installed linux to a working k8s cluster.    
-Its vision is to find and integrate the best tools out there (while using KISS priciple).    
+Its vision is to find and integrate the best tools out there (while using KISS principle).    
 
 # Why
-Going beyond minikube, making your own (usually on prem) k8s cluster (with the usuall addons installed) is still too hard or needlesly complex. Kubeadm is so strong now, that complex projects don't make sense.   
-The we felt that what is missing is getting things before and after the cluster installation, to get an initial (but reasonable) platform up. 
+Going beyond minikube, making your own (usually on prem) k8s cluster (with the usuall addons installed) is still too hard or needlessly complex. Kubeadm is so strong now, that complex projects don't make sense.   
+We felt that what was missing was getting things before and after the cluster installation, to get an initial (but reasonable) platform up. 
 
 # What it makes it different:
 - pure kubeadm based (all needless complexity removed); the stronger kubeadm will be, the smaller this project!
-- kubernetes cluster platform: not only k8s, but also the importand addons
+- kubernetes cluster platform: not only k8s, but also the important addons
 - this project does not hold any "custom" addon, everything that is installed is fetched directly their official repos (mostly helm repos)
 - drives users towards good practices: e.g. segregate nodes in 3 categories (when possible): masters, infra, compute; (infra holds ingress controller, prometheus, grafana, and similar support tools)
 - optionally, when docker_setup enabled, this project will also setup the docker with known kernel params for os (those from the k8s docs).
@@ -37,8 +38,8 @@ The we felt that what is missing is getting things before and after the cluster 
 (PRs are welcome :)
 
 # Since when
-Started years back. Battle tested on for all Centos/RHEL 7.2+ till 7.6 and Ubuntu 16.04,18.04,19.10 (both with overlay2 and automatic docker_setup).    
-Actively used on a daily basis and tested with k8s starting 1.7 till 1.16.    
+Started years back. Battle tested on for all Centos/RHEL 7.2+ till 7.6 and Ubuntu 16.04,18.04,19.10,20.04 (both with overlay2 and automatic docker_setup).    
+Actively used on a daily basis and tested with k8s starting 1.7 till 1.19.    
 
 ## Targets/pros&cons
 Kubeadm simplifies drastically the installation, so for BYO (vms,desktops,baremetal), complex projects like kubespray/kops are not required any longer.
@@ -52,9 +53,10 @@ The project is for those who want to create&recreate k8s cluster using the offic
 - it tries to use modern methods of deploying the "addons". E.g. heapster, ingress, prometheus, etc -> all via helm. Pure and clean:
 - Ingresses (via helm chart)
 - Persistent storage (vsphere/ceph/nfs) (vsphere up to date, rook.io (ceph) needs updates; NFS not actively tested) 
-- dashboard (via helm chart)
-- heapster (via helm chart)
-- supports proxy
+- dashboard 2.0 (via helm chart)
+- metrics-server (via helm chart)
+- supports corporate http proxy
+- supports (corporate/intranet) docker registry mirrors (which should mirror: k8s.gcr.io,docker.io,quay.io)
 - modular, clean code, supporting multiple activies by using ansible tags (e.g. add/reset a subgroup of nodes).
 - optionally help configuring container engine (e.g. docker)
 
@@ -90,7 +92,7 @@ Note: dashboard will by default use the master machine, but also deploy under th
 * Install the kubeadm repo
 * Install kubeadm, kubelet, kubernetes-cni, and kubectl
 * If desired, manipulate SELinux setting (control via `group_vars/all`)
-* Set kubelet `--cgroup-driver=systemd` , swap-off, and many other settings required by kubelet to work (control via `group_vars/all`)  
+* Control/set kubelet cgroup driver, swap-off, and many other settings required by kubelet to work (control via `group_vars/all`)  
 * Reset activities (like kubeadm reset, unmount of `/var/lib/kubelet/*` mounts, ip link delete cbr0, cni0 , etc.) - important for reinstallations.
 * Initialize the cluster on master with `kubeadm init`
 * Install user specified pod network from `group_vars/all` (flannel, calico, weave, etc)
@@ -120,7 +122,7 @@ If for any reason anyone needs to relax RBAC, they can do:
 Use the release/branch that fits your k8s version needs.
 While  master may have additinal features, it's as tested as the releases.
 
-## Full cluster installation
+## Full cluster (re)installation (reset + install)
 ```shell
 git clone https://github.com/ReSearchITEng/kubeadm-playbook.git
 cd kubeadm-playbook/
@@ -128,7 +130,7 @@ cp hosts.example hosts
 vi hosts <add hosts>
 # Setul vars in group_vars
 vi group_vars/all/* <modify vars as needed>
-ansible-playbook -i hosts site.yml [--skip-tags "docker,prepull_images,kubelet"]
+ansible-playbook -i hosts site.yml [--skip-tags "docker,prepull_images,kubelet"] [-f1]
 ```
 If there are any issues, you may want to run only some of the steps, by choosing the appropriate tags to run.
 Read the site.yml. Here are also some explanations of important steps:
@@ -138,8 +140,13 @@ Read the site.yml. Here are also some explanations of important steps:
 - install master (role/tag: master)
 - install nodes  (role/tag: node)
 - install network, helm, ingresses, (role/tag: post_deploy)
+- read the docs/Troubleshooting.md
 
-## Add manage (add/reinstall) nodes:
+## Add nodes:
+- modify inventory (**hosts** file), and leave the primary-master intact, but for nodes, keep *ONLY* the nodes to be managed (added/reset)
+- ``` ansible-playbook -i hosts only_nodes_only_install.yml --tags node ``` ; More in the docs section.
+
+## Add nodes in 2 steps: reset node + install node:
 - modify inventory (**hosts** file), and leave the primary-master intact, but for nodes, keep *ONLY* the nodes to be managed (added/reset)
 - ``` ansible-playbook -i hosts site.yml --tags node ``` ; More in the docs section.
 
@@ -152,6 +159,17 @@ There are other operations possible against the cluster, look at the file: site.
 - "--tags reset" -> which resets the cluster in a safe matter (first removes all helm chars, then cleans all PVs/NFS, drains nodes, etc.)
 - "--tags helm_reset" -> which removes all helm charts, and resets the helm.
 - "--tags cluster_sanity" -> which does, of course, cluster_sanity and prints cluster details (no changes performed)
+
+## Playbooks
+site.yml -> holds all tasks, including reset, install, post_deploy (overlay network, charts install), sanity;    
+This way, site.yml should be for install install of the cluster (where all steps are required).
+One may use site.yml for maintenance, but always use the tags for the desired actions (on top of keeping only primary-master and desired machines for which actions are targeted)
+
+The below playbooks are subsets of the site.yml:
+- all_install.yml -> holds install tasks only (no reset), but for all types of machines (
+- all_reset.yml -> reset kubernetes related packages and k8s setups in all machines in the inventory)
+- only_nodes_only_install.yml -> runs only install actions only on nodes in the inventory (nothing on masters)
+- only_secondaryMasters_only_install.yml -> runs install actions only on secondary-masters present in the inventory (and nothing on primary-masters or nodes)
 
 ## Check the installation of dashboard
 The output should have already presented the required info (or run again: `ansible-playbook -i hosts site.yml --tags cluster_sanity`).

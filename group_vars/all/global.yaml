@@ -11,10 +11,10 @@
 #proxy_env:
 #  http_proxy: 'http://proxy.corp.example.com:8080'
 #  https_proxy: 'http://proxy.corp.example.com:8080'
-#  no_proxy: '127.0.0.1,localhost,.example.com,.svc,.local,/var/run/docker.sock,.sock,sock' 
+#  no_proxy: '127.0.0.1,localhost,.example.com,.svc,.local,.localdomain,.internal,127.0.1.1,127.254.254.254,169.254.169.254,169.254.169.253,169.254.169.123,/var/run/docker.sock,.sock,sock,.socket'
 #####
 
-KUBERNETES_VERSION: "1.16.3"
+KUBERNETES_VERSION: "1.21.4"
 # Software versions (used by installation, package manager, image pull, etc. )
 
 KEEPALIVED_VERSION: "1.3.5"
@@ -32,8 +32,8 @@ KEEPALIVED_VERSION: "1.3.5"
 ## (use latest only on OSes which have package managers that understand it (most do))
 package_state: present #latest
 ## when package_state: present and kube*_version params below are undefined, the playbook will not touch your kube* files, and you are in full control.
-## kube* requires full_kube_reinstall set to True! (due to ansible (pre 2.4), which does not downgrade packages, you need to uninstalling first)
-# full_kube_reinstall: False #default False # When set to True, kubectl, kubelet, kubeadm, kubernetes-cni will be uninstalled first
+## kube* requires full_kube_reinstall set to True! (find it below) (due to ansible (pre 2.4), which does not downgrade packages, you need to uninstalling first)
+## full_kube_apt_unhold is required when packages were put on hold previously.
 kubeadm_version: "{{ KUBERNETES_VERSION }}*" #1.9.* #when undefined, it will not check it
 kubelet_version: "{{ KUBERNETES_VERSION }}*" #1.9.* #when undefined, it will not check it
 kubectl_version: "{{ KUBERNETES_VERSION }}*" #1.9.* #when undefined, it will not check it
@@ -52,13 +52,13 @@ wait_charts_deploy_sanity: false #When defined, it will wait till all helm chart
 ## it will pre-pull from either images_repo defined below; if not defined, from k8s.gcr.io
 ####
 pre_pull_k8s_images: True
+# pre_pull_k8s_images_ignore_errors: no
 #####
 
 ####
 ## Docker images repo
-## If you have your internal docker registry which proxies them (e.g. a nexus3 with docker proxy), replace the value here:
-# images_repo: "k8s.gcr.io"
-# images_repo: "myk8sgcrio.corp.example.com"
+## If you have your internal docker registry which proxies them (e.g. a nexus3 with docker proxy mirroring at least: k8s.gcr.io,docker.io,quay.io), replace the value below.
+# images_repo: "docker-regisptry-proxy.corp.example.com"
 #####
 
 ## Images for prefetching when pre_pull_k8s_images is true and images_repo is defined
@@ -74,6 +74,9 @@ DOCKER_IMAGES: [
 ## When full_kube_reinstall is False or undefined, it will not reinstall # and it won't remove the /etc/kubernetes/ folder before reinstall
 ## Should be used only if a downgrade in kube* tools is required, otherwise it will waste a lot of time reinstalling unnecessary.
 full_kube_reinstall: False # undefined is False. #Make it False for faster redeployments. Make true when you need downgrade (ansible does not downgrade rpms autoamtically)
+                           # reinstall is set to True, kubectl, kubelet, kubeadm, kubernetes-cni will be uninstalled first
+full_kube_apt_unhold: False # undefined is False. # use it together with full_kube_reinstall (usually in non-prod) when you want automatic unhold of packages on (debian based like ubuntu)
+                            # unhold is required also when you define version for kube* packages, and packages were hold initially
 etcd_clean: True # default is True, and it will cleanup /var/lib/etcd/ !
 #####
 
@@ -166,15 +169,50 @@ taint_for_label:
 - label: 'node-role.kubernetes.io/infra='
   taint: 'PreferNoSchedule'
 
-
 ########## VARIOUS GENERIC SETTINGS #####
-## This will be removed in the future versions
+## This will be removed in the future versions:
 # kubeadm_docker_insecure_registry: registry.example.com:5000
 #####
 
 #####
-# VARIOUS
-# shell for bash-completion for kubectl, kubeadm, helm; currently only bash and zsh is supported.
-shell: 'bash'
+# BASH and ZSH aliases and cli completion
+# shell for bash-completion for kubectl, kubeadm, helm; currently bash and zsh are supported (adding more is very simple)
+
+aliases: # to disable adding aliases, comment out this entire section
+  rc: local # local -> ~root/.bashrc && ~root/.zshrc # local is the default, if undefined
+            # global -> '/etc/bash.bashrc' (ubuntu) '/etc/bashrc' (REDHAT); global -> '/etc/zshrc' (both ubuntu&RH)
+            # custom -> see the below:
+  rc_bash_custom: '/etc/profile.d/k8s_aliases.sh' # /etc/profile.d/*.sh location is sourced by all *sh, non-bash ones might not compatible with the generated file. Use with care.
+  rc_zsh_custom: '/etc/zshrc' # /etc/profile.d/*.sh location is sourced by all *sh, non-bash ones might not compatible with the generated file. Use with care.
+  file_create_if_missing: no # destination file will be created only if this is enabled. Otherwise the file will be updated only if exists.
+  list:
+  - "alias k='kubectl '"
+  - "alias kf='kubectl delete --force --grace-period=0 --ignore-not-found '"
+  - "alias kx='kubectl config use-context '"
+  - "alias ks='kubectl -n kube-system '"
+  - "alias km='kubectl -n monitoring '"
+  - "alias kg='kubectl get --all-namespaces -o wide '" # --show-labels '"
+  - "alias kgl='kubectl get --all-namespaces -o wide --show-labels '"
+  - "alias kgp='kubectl get --all-namespaces -o wide --show-labels po '"
+  - "alias kk='kubectl -o wide --show-labels '"
+  - "alias watch='watch '"
+  - "alias wp='watch kg po '" # -w --show-labels '"
+  - "alias wipt='watch -n1 iptables -vnL '"
+  - "alias hs='helm --namespace kube-system '"
+  - "alias hm='helm --namespace monitoring '"
+  - "alias hg='helm list --all --all-namespaces --pending '"
+  kubectl_complete_also_aliases:
+  - k
+  - kf
+  - kx
+  - ks
+  - km
+  - kg
+  - kk
+  helm_complete_also_aliases:
+  - hs
+  - hm
+  - hg
+
 #####
 

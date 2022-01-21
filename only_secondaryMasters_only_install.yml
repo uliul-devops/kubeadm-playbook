@@ -1,7 +1,7 @@
 ---
 ## Preparations
-## Making sure python exists on all nodes, so Ansible will be able to run; make sure min vars are defined
-- hosts: all
+## Making sure python exists on all nodes, so Ansible will be able to run:
+- hosts: secondary-masters
   gather_facts: no
   become: yes
   become_method: sudo
@@ -39,18 +39,11 @@
     ## reason for ignore_errors: yes
     ## is similar to the one explained above (complements it)
 
-  - name: Make sure proxy_env map is defined, even if not required; must be a map, e.g. empty map
-    set_fact:
-      proxy_env: '{{ proxy_env |default({}) }}'
-      cacheable: yes
-    tags: always
-    when: proxy_env is not defined
-
   - setup: # aka gather_facts
     tags: always # required for tags, see ansible issue: #14228
     
-  - name: test min. vars (group_vars/all) are set, like ClusterConfiguration (and k8s_network_addons_urls if netw is not via helm chart)
-    debug: msg='Make sure min. vars (group_vars/all) are set, like ClusterConfiguration (and k8s_network_addons_urls if netw is not via helm chart)'
+  - name: test min. vars (group_vars/all) are set (ClusterConfiguration and k8s_network_addons_urls)
+    debug: msg='Make sure min. vars are set in group_vars/all/ (e.g. ClusterConfiguration and k8s_network_addons_urls)'
     when: 
     - ClusterConfiguration is not defined
     - JoinConfiguration is not defined
@@ -59,44 +52,19 @@
     - JoinConfiguration is not defined
     tags: always # always check if we have vars in place
 
-## proper reset of any previous cluster (if any)
-- hosts: primary-master
-  become: yes
-  become_method: sudo
-  tags:
-  - reset
-  - master
-  roles:
-  #- { role: helm, task: helm_reset, tags: [ 'reset', 'helm_reset' ] } # in helm3 is no longer required
-  - { role: storage, task: remove_pvs, tags: [ 'reset', 'storage_reset', 'pvs_reset' ] }
-  - { role: storage, task: nfs_reset, tags: [ 'reset', 'storage_reset', 'nfs_reset' ] }
-  - { role: storage, task: rook_reset, tags: [ 'reset', 'storage_reset', 'rook_reset' ] }
-  - { role: tools, task: reset_drain, tags: [ 'reset', 'node_reset', 'drain', 'node_drain' ] } #done on master, affecting nodes
-
-## nodes -> reset and install common part (for all nodes)
-- hosts: nodes
-  become: yes
-  become_method: sudo
-  tags:
-  - node
-  roles:
-  - { role: tools, task: reset, tags: [ 'reset', 'node_reset' ], when: "inventory_hostname not in groups['masters']" }
-  - { role: tools, task: weave_reset, tags: [ 'reset', 'node_reset', 'network_reset', 'weave_reset', 'weave' ], when: "inventory_hostname not in groups['masters']" }
-  - { role: common, task: all, tags: [ 'common', 'install', 'common_install', 'node_install', 'node' ], when: "inventory_hostname not in groups['masters']" }
-
-## master -> reset and install common part (for all masters - and sometimes etcd when colocated with masters)
-- hosts: masters
+- hosts: secondary-masters
   become: yes
   become_method: sudo
   tags:
   - master
+  - secondary_masters
   roles:
   - { role: tools, task: reset, tags: [ 'reset', 'master_reset' ] }
   - { role: tools, task: weave_reset, tags: [ 'reset', 'master_reset', 'network_reset', 'weave', 'weave_reset' ] }
   - { role: common, task: all, tags: [ 'common', 'install', 'common_install', 'master_install'] }
 
 ## master -> install keepalived on masters (relevat if HA)
-- hosts: masters
+- hosts: secondary-masters
   become: yes
   become_method: sudo
   any_errors_fatal: yes
@@ -105,25 +73,13 @@
   - install
   - ha
   - master_install
+  - secondary_masters
   roles:
   - role: keepalived
     tags: [ 'master', 'install', 'master_install', 'ha', 'keepalived']
     when: 
     - ( groups['masters'] | length ) > 1 
     - ( custom.networking.masterha_type | default('vip') ) == 'vip'
-
-- hosts: primary-master 
-  name: primary-master (or master in general) - it applies to both ha and non-ha
-  become: yes
-  become_method: sudo
-  any_errors_fatal: yes
-  tags:
-  - master
-  - install
-  - master_install
-  - ha
-  roles:
-  - { role: primary-master, task: primary, tags: [ 'primary-master', 'master', 'install', 'master_install'] } 
 
 - hosts: secondary-masters
   become: yes
@@ -134,45 +90,9 @@
   - install
   - ha
   - master_install
+  - secondary_masters
   roles:
   - { role: non-primary-master, tags: [ 'secondary-masters', 'master', 'install', 'master_install', 'secondary_masters'] } 
-
-## node -> install nodes (kubeadm join, etc)
-- hosts: nodes
-  become: yes
-  become_method: sudo
-  any_errors_fatal: yes
-  tags:
-  - node
-  - install
-  - node_install
-  roles:
-  - { role: non-primary-master, tags: [ 'node', 'install', 'node_install'], when: "inventory_hostname not in groups['masters']" }
-
-## node -> label nodes (even when master is also a node)
-- hosts: nodes
-  become: yes
-  become_method: sudo
-  any_errors_fatal: yes
-  tags:
-  - node
-  - install
-  - node_install
-  - label
-  roles:
-  - { role: tools, task: labels, tags: [ 'label'] }
-
-## Post deploy (network, storage, taints, helm installation, helm charts deploy, any other addons)
-- hosts: primary-master
-  become: yes
-  become_method: sudo
-  tags:
-  - post_deploy
-  roles:
-  - { role: post_deploy, task: all, tags: [ 'post_deploy_no_helm' ] }
-  - { role: storage, task: create_all, tags: [ 'storage', 'rook', 'nfs', 'vsphere' ] }
-  - { role: helm, task: helm, tags: [ 'helm' ] }
-  - { role: helm, task: charts_deploy, tags: [ 'helm', 'charts_deploy' ] }
 
 ### For fixes like vsphere's bug, we have to reboot after some more fixes...
 #https://github.com/vmware/kubernetes/issues/495
@@ -188,11 +108,12 @@
   - { role: tools, task: reboot, tags: [ 'reboot_minimal' ], when: "ClusterConfiguration.cloudProvider is defined and ClusterConfiguration.cloudProvider == 'vsphere' and allow_restart | default(False) and vsphere_bug_fix is defined and vsphere_bug_fix" }
 
 ## Generic Sanity
-- hosts: masters
+- hosts: secondary-masters
   become: yes
   become_method: sudo
   tags:
   - master
+  - secondary_masters
   pre_tasks:
   - name: remove temporary mustreboot temporary group
     group:

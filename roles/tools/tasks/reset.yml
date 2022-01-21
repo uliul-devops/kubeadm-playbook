@@ -9,9 +9,22 @@
 
 - block:
 
-  - name: Reset weave network # if it was used
-    shell: /usr/local/bin/weave reset --force
+  - name: stop keepalived for cleanup activities
+    systemd: name={{ item }} state=stopped
+    with_items:
+    - keepalived
+    tags:
+    - kubelet
+    - uninstall
     ignore_errors: yes
+    when: 
+    - groups['masters'] | length > 1 
+    - ( custom.networking.masterha_type | default('vip') ) == 'vip'
+
+# We had to remove it, as it blocks the flow. It also fetches docker.io images and in some setups there is no access to or fails due to limits on docker hub...
+#  - name: Reset weave network # if it was used
+#    shell: /usr/local/bin/weave reset --force
+#    ignore_errors: yes
   
   - name: remove pods NFS mount leftovers; Note you have to collect them from the remote storage (e.g. vsphere datastore) also
     shell: umount -f $(mount | grep '/kubelet/pods/' | grep '/volumes/kubernetes.io~nfs' | awk '{print $3}')
@@ -20,8 +33,8 @@
     - nfs_reset
     ignore_errors: yes
 
-  - name: Reset cluster (kubeadm reset --force)
-    command: /usr/bin/kubeadm reset --force
+  - name: Reset cluster (kubeadm reset --force --ignore-preflight-errors=all )
+    command: /usr/bin/kubeadm reset --force --ignore-preflight-errors=all
     ignore_errors: yes
     # TODO: if cluster is installed, but kubedm is no longer available on the machine, we will not have a reset of cluster...
 
@@ -58,18 +71,6 @@
     ignore_errors: yes
     # TODO: if cluster is installed, but kubedm is no longer available on the machine, we will not have a reset of cluster...
 
-  - name: Remove before reinstall packages
-    package: name={{ item }} state=absent
-    with_items:
-    - kubelet
-    - kubeadm
-    - kubectl
-    - kubernetes-cni
-    when: full_kube_reinstall | default (False) #is defined and full_kube_reinstall
-    tags:
-    - kubelet
-    - uninstall
-
   - name: stop kubelet and etcd for cleanup activities
     systemd: name={{ item }} state=stopped
     with_items:
@@ -80,17 +81,34 @@
     - uninstall
     ignore_errors: yes
 
-  - name: stop keepalived for cleanup activities
-    systemd: name={{ item }} state=stopped
+  - name: unhold before reinstall packages
+    shell: apt-mark unhold {{ item }}
+    ignore_errors: yes
     with_items:
-    - keepalived
+    - kubeadm
+    - kubelet
+    - kubectl
+    - kubernetes-cni
+    - cri-tools
+    when:
+    - full_kube_reinstall | default (False)
+    - full_kube_apt_unhold | default (False)
+    - ansible_os_family == "Debian"
     tags:
     - kubelet
     - uninstall
-    ignore_errors: yes
-    when: 
-    - groups['masters'] | length > 1 
-    - ( custom.networking.masterha_type | default('vip') ) == 'vip'
+
+  - name: Remove before reinstall packages
+    package: name={{ item }} state=absent
+    with_items:
+    - kubeadm
+    - kubelet
+    - kubectl
+    - kubernetes-cni
+    when: full_kube_reinstall | default (False) #is defined and full_kube_reinstall
+    tags:
+    - kubelet
+    - uninstall
 
   - name: remove plugins mount leftovers; Note you have to collect them from the remote storage (e.g. vsphere datastore) also
     #shell: 'umount $(mount | grep " on /var/lib/kubelet/plugins/kubernetes.io/" | cut -f1 -d" ")'
@@ -107,6 +125,9 @@
     - kubelet
     - uninstall
     ignore_errors: yes
+
+  - name: docker network prune -f
+    shell: 'docker network prune -f'
 
   #https://github.com/kubernetes/kubernetes/issues/39557
   - name: cni0/cbr0 IP alloction issue

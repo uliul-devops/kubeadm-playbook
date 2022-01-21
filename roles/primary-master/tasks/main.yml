@@ -39,6 +39,24 @@
 #  #- ClusterConfiguration.apiVersion == "kubeadm.k8s.io/v1alpha1"
 #  #when: full_kube_reinstall is defined and full_kube_reinstall and ClusterConfiguration.kubernetesVersion is defined
 
+
+- name: Prepull coredns image kubeadm_coredns_image_issue_2525
+  shell: kubeadm config --kubernetes-version {{ ClusterConfiguration.kubernetesVersion }} images list | grep coredns
+  register: kubeadm_coredns_image_issue_2525_origimg
+  ignore_errors: yes
+  when:
+  - pre_pull_k8s_images is defined
+  - pre_pull_k8s_images
+  - ClusterConfiguration.kubernetesVersion is version_compare ( 'v1.11', '>=' )
+
+- name: Prepull coredns image kubeadm_coredns_image_issue_2525_PULL
+  command: "docker pull {{ kubeadm_coredns_image_issue_2525_origimg.stdout_lines[0] | regex_replace ('k8s.gcr.io',images_repo |default ('k8s.gcr.io')) | regex_replace ('/coredns/','/' ) }}"
+  ignore_errors: yes
+  when:
+  - pre_pull_k8s_images is defined
+  - pre_pull_k8s_images
+  - ClusterConfiguration.kubernetesVersion is version_compare ( 'v1.11', '>=' )
+
 - name: Pull images on master (if defined, it uses images_repo; otherwise, defaults to k8s.gcr.io )
   command: "kubeadm config images pull --kubernetes-version {{ ClusterConfiguration.kubernetesVersion }} --image-repository {{ images_repo |default ('k8s.gcr.io') }}"
   tags:
@@ -50,6 +68,7 @@
   - pre_pull_k8s_images 
   #- DOCKER_IMAGES is not defined ## or images_repo is not defined
   - ClusterConfiguration.kubernetesVersion is version_compare ( 'v1.11', '>=' )
+  ignore_errors: "{{ pre_pull_k8s_images_ignore_errors | default (no) }}"
 
 - name: making sure there is an apiServer section under ClusterConfiguration
   set_fact:
@@ -273,9 +292,9 @@
   - ClusterConfiguration.cloudProvider is defined 
   - ClusterConfiguration.cloudProvider == "vsphere"
 
-- name: export KUBECONFIG in master's ~/.bash_profile
+- name: export KUBECONFIG in master's ~/.bashrc
   lineinfile: 
-    dest: ~/.bash_profile
+    dest: ~/.bashrc
     line: "export KUBECONFIG=/etc/kubernetes/admin.conf"
     state: present
     create: yes
@@ -293,12 +312,23 @@
   pause: seconds=10
   changed_when: false
 
+- name: get name of primary_master when single node cluster
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  shell: 'kubectl get no -o=jsonpath="{.items[0].metadata.name}"'
+  when:
+  - groups['all'] | length == 1
+  register: result_primary_master_name
+  tags:
+  - all
+
 ## In the below 4 cases, we should have used master_name, but k8s does not follow the fqdn definitions...
 - name: when cluster is one machine only, remove NoSchedule taint from master - using ansible_fqdn
   ## TODO: Use InitConfiguration to remove the taint on master, with the same condition.
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
-  shell: 'kubectl taint nodes {{ ansible_fqdn }} {{ item }} --overwrite'
+  #shell: 'kubectl taint nodes {{ ansible_fqdn }} {{ item }} --overwrite'
+  shell: 'kubectl taint nodes {{ result_primary_master_name.stdout_lines[0] }} {{ item }} --overwrite'
   when:
   - groups['all'] | length == 1
   with_items: #'{{ taints_master }}'
@@ -309,40 +339,41 @@
   tags:
   - taints
 
-- name: when cluster is one machine only, remove NoSchedule taint from master - using inventory_hostname_short
-  ## TODO: Use InitConfiguration to remove the taint on master, with the same condition.
-  environment:
-    KUBECONFIG: /etc/kubernetes/admin.conf
-  shell: 'kubectl taint nodes {{ inventory_hostname_short }} {{ item }} --overwrite'
-  when:
-  - groups['all'] | length == 1
-  with_items: #'{{ taints_master }}'
-  - 'node-role.kubernetes.io/master:NoSchedule-'
-  - 'node-role.kubernetes.io/master=:PreferNoSchedule'
-  - 'node-role.kubernetes.io/infra=:PreferNoSchedule'
-  ignore_errors: yes
-  tags:
-  - taints
+# - name: when cluster is one machine only, remove NoSchedule taint from master - using inventory_hostname_short
+#   ## TODO: Use InitConfiguration to remove the taint on master, with the same condition.
+#   environment:
+#     KUBECONFIG: /etc/kubernetes/admin.conf
+#   shell: 'kubectl taint nodes {{ inventory_hostname_short }} {{ item }} --overwrite'
+#   when:
+#   - groups['all'] | length == 1
+#   with_items: #'{{ taints_master }}'
+#   - 'node-role.kubernetes.io/master:NoSchedule-'
+#   - 'node-role.kubernetes.io/master=:PreferNoSchedule'
+#   - 'node-role.kubernetes.io/infra=:PreferNoSchedule'
+#   ignore_errors: yes
+#   tags:
+#   - taints
 
 - name: when cluster is one machine only, labeling it also as infra node - using ansible_fqdn
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
-  shell: 'kubectl label nodes {{ ansible_fqdn }} "node-role.kubernetes.io/infra=" --overwrite'
+  shell: 'kubectl label nodes {{ result_primary_master_name.stdout_lines[0] }} "node-role.kubernetes.io/infra=" --overwrite'
+  #shell: 'kubectl label nodes {{ ansible_fqdn }} "node-role.kubernetes.io/infra=" --overwrite'
   when:
   - groups['all'] | length == 1
   register: command_result
   changed_when: '"not labeled" not in command_result.stdout'
   ignore_errors: yes
 
-- name: when cluster is one machine only, labeling it also as infra node - using inventory_hostname_short
-  environment:
-    KUBECONFIG: /etc/kubernetes/admin.conf
-  shell: 'kubectl label nodes {{ inventory_hostname_short }} "node-role.kubernetes.io/infra=" --overwrite'
-  when:
-  - groups['all'] | length == 1
-  register: command_result
-  changed_when: '"not labeled" not in command_result.stdout'
-  ignore_errors: yes
+# - name: when cluster is one machine only, labeling it also as infra node - using inventory_hostname_short
+#   environment:
+#     KUBECONFIG: /etc/kubernetes/admin.conf
+#   shell: 'kubectl label nodes {{ inventory_hostname_short }} "node-role.kubernetes.io/infra=" --overwrite'
+#   when:
+#   - groups['all'] | length == 1
+#   register: command_result
+#   changed_when: '"not labeled" not in command_result.stdout'
+#   ignore_errors: yes
 
 - name: "sanity - wait for alls pod to be running (besides kube-dns/coredns which won't be ready yet as overlay network is not yet deployed, and workder nodes are not yet installed (on clusters with more than one machine))"
   environment:

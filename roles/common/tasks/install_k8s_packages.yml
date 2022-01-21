@@ -17,7 +17,7 @@
     when: ansible_os_family == "Debian"
 
   - apt_repository:
-      repo: deb http://apt.kubernetes.io/ kubernetes-xenial main
+      repo: deb https://apt.kubernetes.io/ kubernetes-xenial main
       state: present
       #filename: 'kubernetes.list'
       update_cache: yes
@@ -38,11 +38,14 @@
       dest: /etc/yum.repos.d/kubernetes.repo
       section: "{{item}}"
       option: proxy
-      value: "{{proxy_env.https_proxy | default ([]) }}"
+      value: "{{proxy_env.https_proxy | default ('') }}"
     with_items: [ 'kubernetes' ]
-    when: proxy_env is defined and ansible_os_family == "RedHat"
+    when:
+    - proxy_env is defined
+    - proxy_env.https_proxy is defined
+    #- proxy_env.https_proxy | length > 0
+    - ansible_os_family == "RedHat"
   when: kubernetes_repo_create | default('true')
-
 
 - name: Clean yum metadata
   command: yum clean all
@@ -65,6 +68,23 @@
   with_items:
   - socat
   - ipset
+
+### unhold (debian)
+- name: unhold before upgrade/install packages (when on debian)
+  shell: apt-mark unhold {{ item }}
+  ignore_errors: yes
+  with_items:
+  - kubeadm
+  - kubelet
+  - kubectl
+  - kubernetes-cni
+  - cri-tools
+  when:
+  - full_kube_apt_unhold | default (False)
+  - ansible_os_family == "Debian"
+  - kubelet_version is defined and kubelet_version!='present'
+  - kubectl_version is defined and kubectl_version!='present'
+  - kubeadm_version is defined and kubeadm_version!='present'
 
 ### kubelet
 - name: Install kubelet
