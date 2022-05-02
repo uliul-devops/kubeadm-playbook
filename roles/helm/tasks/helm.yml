@@ -12,13 +12,42 @@
   - always
 
 - block:
-  - name: 'Download helm binary archive https://get.helm.sh/helm-{{ helm.helm_version }}-linux-{{ HOST_ARCH }}.tar.gz'
+  - name: check helm version (if exists)
+    environment: '{{env_kc}}'
+    shell: helm version --template="{{ '{{.Version}}' }}"
+    #local_action: shell helm version --template="{{ '{{.Version}}' }}"
+    register: helm_version_result
+
+  - name: set_fact helm_install_not_required when existing version is identical
+    set_fact: helm_install_not_required="not"
+    when:
+    - helm_version_result is defined
+    - helm_version_result.stdout | length > 0
+    - helm_version_result.stdout_lines[0] == helm.helm_version
+
+  - debug:
+      msg: 'helm versions compare. Existing (if any): requested: {{helm.helm_version}} and existings (if any): {{helm_version_result.stdout_lines[0]}}'
+    when:
+    - helm_version_result is defined
+    - helm_version_result.stdout | length > 0
+    #when: helm_version_result.stdout_lines[0] == helm.helm_version
+
+  ignore_errors: yes
+  tags:
+  - helm
+
+- block:
+  - name: 'Download helm binary archive {{ helm.archive_url | default ("https://get.helm.sh") }}/helm-{{ helm.helm_version }}-linux-{{ HOST_ARCH }}.tar.gz'
     environment: '{{env_kc}}'
     get_url: 
-      url: "https://get.helm.sh/helm-{{ helm.helm_version }}-linux-{{ HOST_ARCH }}.tar.gz"
+      url: "{{ helm.archive_url | default ('https://get.helm.sh') }}/helm-{{ helm.helm_version }}-linux-{{ HOST_ARCH }}.tar.gz"
       dest: /tmp/helm-{{ helm.helm_version }}-linux-{{ HOST_ARCH }}.tar.gz
       force: no
       mode: "0755"
+    retries: 3
+    delay: 3
+    register: result
+    until: result is not failed
     
   - name: unarchive
     unarchive:
@@ -36,26 +65,40 @@
       remote_src: yes
     become: yes
     become_user: root
+  when:
+  - helm_install_not_required is not defined
+  tags:
+  - helm
 
-  - name: helm repo remove (before add)
-    environment: '{{env_kc}}'
-    command: helm repo remove {{ item.name }}
-    with_items:
-    - '{{ helm.repos | default("") }}'
-    when: helm is defined and helm.repos is defined
-    ignore_errors: yes
+- block:
+
+#  - name: helm repo remove (before add) - deprecated by --force-update flag
+#    environment: '{{env_kc}}'
+#    command: helm repo remove {{ item.name }}
+#    with_items:
+#    - '{{ helm.repos | default("") }}'
+#    when: helm is defined and helm.repos is defined
+#    ignore_errors: yes
 
   - name: helm repo add 
     environment: '{{env_kc}}'
-    command: helm repo add {{ item.name }} {{ item.url }}
+    command: helm repo add --force-update {{ item.name }} {{ item.url }}
     with_items: 
     - '{{ helm.repos | default("") }}'
     when: helm is defined and helm.repos is defined
+    retries: 7
+    delay: 3
+    register: result
+    until: result is not failed
 
   - name: helm repo update #Sometimes initial repo add corrupts the repo and update fixes it.
     environment: '{{env_kc}}'
     command: helm repo update
     when: helm is defined
+    retries: 7
+    delay: 3
+    register: result
+    until: result is not failed
 
   tags:
   - helm
