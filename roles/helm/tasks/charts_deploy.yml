@@ -56,6 +56,47 @@
     register: result
     until: result is not failed
 
+  - name: CALICO BLOCK
+    block:
+
+    - name: Calico - Wait few seconds for deployments to start - wait to make sure calico-node is getting started - required for containerd...
+      pause: seconds=30
+      changed_when: false
+
+    - name: Calico - wait for calico-node pod to appear - required for containerd cni bug...
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      shell: "kubectl get --all-namespaces pods --no-headers | grep calico-node || true "
+      register: command_result
+      until: command_result.stdout != ""
+      retries: 30
+      delay: 7
+      changed_when: false
+  
+    - name: Calico - wait for calico-node pods to become Running - required for containerd cni bug...
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      shell: "kubectl get --all-namespaces pods --no-headers | grep calico-node | grep -v -w 'Running' || true "
+      register: command_result
+      until: command_result.stdout == ""
+      retries: 30
+      delay: 7
+      changed_when: false
+
+    - name: Calico - Wait few seconds for calico-node is Running 1/1 - required for containerd...
+      pause: seconds=20
+      changed_when: false
+  
+    - name: Calico - Restart containerd due to containerd cni bugs are still there in containerd 1.6.6
+      systemd: name=containerd state=restarted enabled=yes daemon_reload=yes
+
+    - name: Calico - Wait few seconds for containerd to restart
+      pause: seconds=20
+      changed_when: false
+
+    ignore_errors: yes # so it will work even when the netw is not set to calido
+    #TBD when: network is defined and is calico...
+
   - name: helm charts/packages deployment - now for those that do have namespace defined (most of the charts)
     environment: '{{env_kc}}'
     command: 'helm upgrade --install --create-namespace --atomic --namespace {{ item.namespace | default("default") }} {{ item.name }} {{ item.repo }} {{ item.options | default ("") }}' #--name

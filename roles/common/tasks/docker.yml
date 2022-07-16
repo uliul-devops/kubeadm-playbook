@@ -109,10 +109,11 @@
 
     when:
     - ansible_os_family == "RedHat"
+    - old_docker
   ## Block for CentOS/RedHat ends here
 
   ### DEBIAN/Ubuntu:
-  - name: Debian/Ubuntu docker installation and docker_setup
+  - name: Debian/Ubuntu (RH new) docker installation and docker_setup
     block:
 
     - name: Install in debian docker (if does not exist)
@@ -127,11 +128,16 @@
       notify:
       - Restart docker
 
-    - name: set docker storage to overlay2 (Debian) - overlay2 works only with ubuntu's official docker distribution (docker.io)
+    - name: set docker storage to overlay2 (Debian / RH new) - overlay2 works only with ubuntu's official docker distribution (docker.io)
       copy:
         content: |
           {
-            "storage-driver": "overlay2"
+            "storage-driver": "overlay2",
+             "exec-opts": ["native.cgroupdriver=systemd"],
+             "log-opts": {
+                "max-size": "1000m",
+                "max-file": "3"
+             },
           }
         dest: /etc/docker/daemon.json
         backup: yes
@@ -142,61 +148,132 @@
       - Restart docker
       # also look at: /etc/default/docker
 
-    - name: set https_proxy in docker (Debian)
+    - name: set https_proxy in docker (Debian / RH new)
       file:
-        path: /etc/systemd/system/docker.service.d/
+        path: /etc/systemd/system/{{ item }}.service.d/
         state: directory
-      when: proxy_env is defined and  ansible_os_family == "Debian"
+      when: proxy_env is defined # and  ansible_os_family == "Debian"
+      with_items:
+      - docker
+      - crio
+      - containerd
       tags:
       - docker
 
-    - name: set https_proxy in docker (Debian) - section
+    - name: set https_proxy in docker (Debian/RH new) - section
       lineinfile:
-        name: /etc/systemd/system/docker.service.d/http-proxy.conf
+        name: /etc/systemd/system/{{ item }}.service.d/http-proxy.conf
         state: present
         create: yes
         line: "[Service]"
-      when: proxy_env is defined and  ansible_os_family == "Debian"
+      when: proxy_env is defined # and  ansible_os_family == "Debian"
+      with_items:
+      - docker
+      - crio
+      - containerd
       tags:
       - docker
       notify:
       - Restart docker
+      - Restart containerd
+      - Restart crio
 
-    - name: set https_proxy in docker (Debian) - https
+    - name: set https_proxy in docker (Debian / RH new) - https
       lineinfile:
-        name: /etc/systemd/system/docker.service.d/http-proxy.conf
+        name: /etc/systemd/system/{{ item }}.service.d/http-proxy.conf
         state: present
         line: 'Environment="https_proxy={{proxy_env.https_proxy | default ([]) }}"'
       when: proxy_env is defined and  ansible_os_family == "Debian"
+      with_items:
+      - docker
+      #- crio
+      #- containerd
       tags:
       - docker
       notify:
       - Restart docker
+      - Restart containerd
+      - Restart crio
 
-    - name: set http_proxy in docker (Debian) - http
+    - name: set http_proxy in docker (Debian / RH new) - http
       lineinfile:
-        name: /etc/systemd/system/docker.service.d/http-proxy.conf
+        name: /etc/systemd/system/{{ item }}.service.d/http-proxy.conf
         state: present
         line: 'Environment="http_proxy={{proxy_env.http_proxy | default ([]) }}"'
       when: proxy_env is defined and  ansible_os_family == "Debian"
+      with_items:
+      - docker
+      #- crio
+      #- containerd
       tags:
       - docker
       notify:
       - Restart docker
+      - Restart containerd
+      - Restart crio
 
-    - name: set no_proxy in docker (Debian)
+    - name: set no_proxy in docker (Debian/RH new)
       lineinfile:
-        name: /etc/systemd/system/docker.service.d/http-proxy.conf
+        name: /etc/systemd/system/{{ item }}.service.d/http-proxy.conf
         state: present
         line: 'Environment="no_proxy={{proxy_env.no_proxy | default ([]) }}"'
       when: proxy_env is defined
+      with_items:
+      - docker
+      - crio
+      - containerd
       tags:
       - docker
       notify:
       - Restart docker
+      - Restart containerd
+      - Restart crio
+
+    # - name: Make sure containerd does not disable cri plugin
+    #   lineinfile:
+    #     dest: /etc/containerd/config.toml
+    #     regexp: '^disabled_plugins = ["cri"]'
+    #     line: "# disabled_plugins = ["cri"]"
+    #   notify:
+    #   - Restart containerd
+    #   tags:
+    #   - docker
+
+    - name: "sanity - make sure master is up (sometimes the above condition is empty as master is in fact not working..."
+      shell: "sudo containerd config default | sudo tee /etc/containerd/config.toml > /dev/null "
+      notify:
+      - Restart containerd
+      tags:
+      - docker
+
+    # https://serverfault.com/questions/1084454/offline-installation-of-kubernetes-fails-when-using-containerd-as-a-cri
+    - name: Make sure containerd sandbox_image does not pull img from outside to avoid proxy issues
+      lineinfile:
+        dest: /etc/containerd/config.toml
+        regexp: '^(.*)sandbox_image = "k8s.gcr.io/pause(.*)$'
+        line: '\1sandbox_image = "{{ images_repo | default ("k8s.gcr.io") }}/pause\2"'
+        backrefs: yes
+      notify:
+      - Restart containerd
+      tags:
+      - docker
+
+    - name: Make sure containerd snapshotter is the desired one
+      lineinfile:
+        dest: /etc/containerd/config.toml
+        regexp: '^(.*)snapshotter = .*$'
+        line: '\1snapshotter = "{{ containerd.snapshotter | default ("overlayfs") }}"'
+        backrefs: yes
+      when:
+      - containerd is defined
+      - containerd.snapshotter is defined
+      notify:
+      - Restart containerd
+      tags:
+      - docker
 
     when:
-    - ansible_os_family == "Debian"
+    - ansible_os_family == "Debian" or ( ansible_os_family == "RedHat" and old_docker is undefined )
     ## END of Debian/Ubuntu block
 
   #- name: Use json-file docker logging driver

@@ -5,7 +5,7 @@ InitConfiguration:
   localAPIEndpoint:
   #  advertiseAddress: 1.2.3.4
   #  bindPort: 6443
-  apiVersion: kubeadm.k8s.io/v1beta2
+  apiVersion: kubeadm.k8s.io/v1beta3
   # bootstrapTokens:
   # - groups:
   #   - system:bootstrappers:kubeadm:default-node-token
@@ -15,10 +15,13 @@ InitConfiguration:
   #   - signing
   #   - authentication
   nodeRegistration:
-  #   criSocket: /var/run/dockershim.sock
+  #   criSocket: unix:///var/run/dockershim.sock
+  #   criSocket: unix:///var/run/crio/crio.sock
+  #   criSocket: unix:///run/cri-dockerd.sock  # https://github.com/Mirantis/cri-dockerd
+    criSocket: unix:///var/run/containerd/containerd.sock
   #   name: <your_master_node_name>
     taints:
     - effect: NoSchedule
-      key: node-role.kubernetes.io/master
+      key: node-role.kubernetes.io/control-plane
     # kubeletExtraArgs:
     #   cgroupDriver: "cgroupfs"
