@@ -14,7 +14,7 @@
 #  no_proxy: '127.0.0.1,localhost,.example.com,.svc,.local,.localdomain,.internal,127.0.1.1,127.254.254.254,169.254.169.254,169.254.169.253,169.254.169.123,/var/run/docker.sock,.sock,sock,.socket'
 #####
 
-KUBERNETES_VERSION: "1.24.1"
+KUBERNETES_VERSION: "{{ KUBERNETES_VERSION_CUSTOM | default ('1.34.0') }}"
 # Software versions (used by installation, package manager, image pull, etc. )
 
 KEEPALIVED_VERSION: "1.3.5"
@@ -31,6 +31,9 @@ KEEPALIVED_VERSION: "1.3.5"
 ## package_state: present # Other valid options for this context: latest
 ## (use latest only on OSes which have package managers that understand it (most do))
 package_state: present #latest
+
+PKGS_K8S_IO_CORE: "{{ PKGS_K8S_IO_CORE_CUSTOM | default ('https://pkgs.k8s.io/core') }}"
+
 ## when package_state: present and kube*_version params below are undefined, the playbook will not touch your kube* files, and you are in full control.
 ## kube* requires full_kube_reinstall set to True! (find it below) (due to ansible (pre 2.4), which does not downgrade packages, you need to uninstalling first)
 ## full_kube_apt_unhold is required when packages were put on hold previously.
@@ -49,7 +52,7 @@ wait_charts_deploy_sanity: false #When defined, it will wait till all helm chart
 ########## Image pre-pull on MASTERS (only)
 ## Usually pre-pull not required, but there is this option here.
 ## pre-pull is now done using kubeadm's pre-pull feature
-## it will pre-pull from either images_repo defined below; if not defined, from k8s.gcr.io
+## it will pre-pull from either images_repo defined below; if not defined, from registry.k8s.io
 ####
 pre_pull_k8s_images: True
 # pre_pull_k8s_images_ignore_errors: False
@@ -57,8 +60,8 @@ pre_pull_k8s_images: True
 
 ####
 ## Docker images repo
-## If you have your internal docker registry which proxies them (e.g. a nexus3 with docker proxy mirroring at least: k8s.gcr.io,docker.io,quay.io), replace the value below.
-# images_repo: "docker-regisptry-proxy.corp.example.com"
+## If you have your internal docker registry which proxies them (e.g. a nexus3 with docker proxy mirroring at least: registry.k8s.io,docker.io,quay.io), replace the value below.
+# images_repo: "docker-registry-proxy.corp.example.com"
 #####
 
 ## Images for prefetching when pre_pull_k8s_images is true and images_repo is defined
@@ -87,7 +90,9 @@ full_kube_reinstall: False # undefined is False. #Make it False for faster redep
                            # reinstall is set to True, kubectl, kubelet, kubeadm, kubernetes-cni will be uninstalled first
 full_kube_apt_unhold: False # undefined is False. # use it together with full_kube_reinstall (usually in non-prod) when you want automatic unhold of packages on (debian based like ubuntu)
                             # unhold is required also when you define version for kube* packages, and packages were hold initially
-etcd_clean: True # default is True, and it will cleanup /var/lib/etcd/ !
+etcd_clean: False # True will cleanup /var/lib/etcd/ !
+
+full_helm_reinstall: False # True will first purge all existing helm deployments. This is good if you had issues with some helm charts like calico, etc.
 #####
 
 #kubeadm_init_args: E.g.: "--skip-preflight-checks" 

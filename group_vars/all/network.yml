@@ -4,7 +4,7 @@ CLUSTER_NAME: demok8s  # used only for defining the clusterConfiguration and joi
 ## ensure you have the DNS set for wildcard, and pointing all the trafic to master or similar setup
 custom:
   networking:
-    dnsDomain: "{{ CLUSTER_NAME }}.myk8s.corp.example.com"  # For MasterHA, if you have dns, put the desired cluster domain here. If no DNS change possible on your side, and you want MasterHA, fix the below 2 values accordinly
+    dnsDomain: "{{ CLUSTER_NAME }}.{{ CORP_DNS_DOMAIN | default ('corp.example.com') }}"  # For MasterHA, if you have dns, put the desired cluster domain here. If no DNS change possible on your side, and you want MasterHA, fix the below 2 values accordinly
 
     ######
     ## masterha_* params are requried when you have MasterHA (meaning when your inventory has "secondary-masters" section not-empty)
@@ -16,10 +16,10 @@ custom:
     # "lb" #Choose lb when you have a MasterHA LB which load-balances across all your masters, on api port (default 6443) 
     #      # Make sure your LB is setup to forward requests to a specific master ONLY when api port /healthz on that host returns status 200 
     #masterha_type: "vip" # or "lb"
-    masterha_ip: "10.1.2.3" #| default('') }}"  # Important when you have MasterHA;  # IP of either your LB or the VIP to be used.
+    masterha_ip: "192.0.0.171" #| default('') }}"  # Important when you have MasterHA;  # IP of either your LB or the VIP to be used.
     ## masterha_fqdn is usually the dns name of masterha_ip above. (We cannot get it automatically in ansible...)
     ## This value is important in order to set apiServerCertSANs in the certs correctly
-    masterha_fqdn: "master-{{ CLUSTER_NAME }}.corp.example.com"  # Important when you have MasterHA, in order to set apiServerCertSANs correctly
+    masterha_fqdn: "master-{{ CLUSTER_NAME }}.{{ CORP_DNS_DOMAIN | default ('corp.example.com') }}"  # Important when you have MasterHA, in order to set apiServerCertSANs correctly
     #masterha_fqdn: "{{ lookup('dig', masterha_ip, 'qtype=PTR') }}" # but requires some pip modules on host...
 
     #masterha_bindPort: 6443 #default is 6443; We recommend to keep it 6443.
@@ -46,8 +46,10 @@ custom:
 #Define network for K8S services 
 SERVICE_NETWORK_CIDR: 10.96.0.0/12
 
-# Select pod Network. One may add mode simply by adding the deployment url and pod netwrod cidr it needs
-podNetwork: 'flannel'
+## Select pod Network. One may add mode simply by adding the deployment url and pod netwrod cidr it needs
+## This section is obsolete. By default calico is installed using its helm charts (see addons.yaml)
+#podNetwork: 'calico'
+#'flannel'
 #'weavenet'
 #'calico'
 

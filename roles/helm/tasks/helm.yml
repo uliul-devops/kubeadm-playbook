@@ -7,7 +7,7 @@
 #  tasks:
 
 - set_fact:
-    env_kc: '{{ proxy_env |default({}) | combine ({"PATH" : "/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/bin"  }) | combine ({"KUBECONFIG" :"/etc/kubernetes/admin.conf"}) }}'
+    env_kc: '{{ proxy_env |default({}) | combine ({"PATH" : "/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/bin:/home/linuxbrew/.linuxbrew/bin"  }) | combine ({"KUBECONFIG" :"/etc/kubernetes/admin.conf"}) }}'
   tags:
   - always
 
@@ -32,7 +32,9 @@
     - helm_version_result.stdout | length > 0
     #when: helm_version_result.stdout_lines[0] == helm.helm_version
 
-  ignore_errors: yes
+  ignore_errors: true
+  when:
+  - helm.helm_version is defined
   tags:
   - helm
 
@@ -63,10 +65,11 @@
       force: yes
       mode: "0755"
       remote_src: yes
-    become: yes
+    become: true
     become_user: root
   when:
   - helm_install_not_required is not defined
+  - helm.helm_version is defined
   tags:
   - helm
 
@@ -78,7 +81,7 @@
 #    with_items:
 #    - '{{ helm.repos | default("") }}'
 #    when: helm is defined and helm.repos is defined
-#    ignore_errors: yes
+#    ignore_errors: true
 
   - name: helm repo add 
     environment: '{{env_kc}}'

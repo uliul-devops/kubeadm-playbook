@@ -58,29 +58,23 @@
   - charts_deploy
 
 - name: "helm full sanity - wait for all installed charts to become running after all batches deployed"
-  tags:
-  - helm
-  - charts_deploy
   block:
   - name: Wait 3 seconds before helm sanity check
-    pause:
+    pause: 
       seconds: 3
     changed_when: false
 
-  - name: helm full sanity - wait for all installed charts to become running
-    environment:
-      KUBECONFIG: /etc/kubernetes/admin.conf
-    shell: "kubectl get --all-namespaces pods --no-headers | grep -v -w 'Running' || true "
+  - name: helm full sanity - wait for all pods to be running (excluding some that may not be ready immediately)
+    shell: "kubectl get pods --all-namespaces --no-headers | grep -v -w 'Running' | grep -v 'kube-dns' | grep -v 'coredns' | grep -v 'tiller-deploy' || true"
+    environment: '{{ env_kc }}'
     register: command_result
-    tags:
-    - sanity_helm
-    - sanity
-    - charts_deploy_sanity
     until: command_result.stdout == ""
-    retries: 60
+    retries: "{{ RETRIES | default(40) }}"
     delay: 3
     changed_when: false
-    when: wait_charts_deploy_sanity | default('false') | bool # it's not mandatory to wait/make sure absolutelly all deployments are fine.
+    tags:
+    - sanity
+    - helm_sanity
 
   - name: Display cluster status after all helm charts deployed
     shell: "kubectl get pods --all-namespaces"
@@ -92,4 +86,5 @@
       msg: "All helm charts deployed successfully. Final cluster status:"
   - debug:
       var: final_status.stdout_lines
+
 

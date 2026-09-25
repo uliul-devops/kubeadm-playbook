@@ -1,11 +1,13 @@
-#https://pkg.go.dev/k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/v1beta2?tab=doc#InitConfiguration
-#check latest api ver here: https://pkg.go.dev/k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm?tab=subdirectories
+#https://pkg.go.dev/k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/v1beta4?tab=doc#InitConfiguration
+#check latest api ver here: https://pkg.go.dev/k8s.io/kubernetes/cmd/kubeadm/app/apis #/kubeadm?tab=subdirectories
 InitConfiguration:
   kind: InitConfiguration
+  timeouts:
+    controlPlaneComponentHealthCheck: 8m0s
   localAPIEndpoint:
   #  advertiseAddress: 1.2.3.4
   #  bindPort: 6443
-  apiVersion: kubeadm.k8s.io/v1beta3
+  apiVersion: kubeadm.k8s.io/v1beta4
   # bootstrapTokens:
   # - groups:
   #   - system:bootstrappers:kubeadm:default-node-token
@@ -18,8 +20,14 @@ InitConfiguration:
   #   criSocket: unix:///var/run/dockershim.sock
   #   criSocket: unix:///var/run/crio/crio.sock
   #   criSocket: unix:///run/cri-dockerd.sock  # https://github.com/Mirantis/cri-dockerd
-    criSocket: unix:///var/run/containerd/containerd.sock
-  #   name: <your_master_node_name>
+    criSocket: unix:///run/cri-dockerd.sock
+#   name: <your_master_node_name>
+    imagePullSerial: false
+    kubeletExtraArgs:
+      - name: cgroup-driver
+        value: "systemd"
+      - name: fail-swap-on
+        value: "false"
     taints:
     - effect: NoSchedule
       key: node-role.kubernetes.io/control-plane
